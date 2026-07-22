@@ -1,7 +1,9 @@
 import type {
+  ClearPlaylistSelectorRequest,
   DetectedVideo,
   PlaylistDetectedMessage,
   PlaylistItem,
+  StartPickingRequest,
   VideosDetectedMessage,
 } from "../shared/types";
 
@@ -19,6 +21,7 @@ if (!window.__videoDownloaderInjected) {
   window.__videoDownloaderInjected = true;
 
   const isChromeUi = (el: Element) => el.closest("nav, header, footer") !== null;
+  const storageKey = `playlistSelector:${location.origin}`;
 
   function collectVideos(): DetectedVideo[] {
     const videos = Array.from(document.querySelectorAll("video"));
@@ -56,15 +59,41 @@ if (!window.__videoDownloaderInjected) {
     return document.body;
   }
 
+  function extractLinksFromContainer(container: Element): PlaylistItem[] {
+    const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"));
+    const seen = new Set<string>();
+    const items: PlaylistItem[] = [];
+
+    for (const anchor of anchors) {
+      const text = anchor.textContent?.trim() ?? "";
+      if (!text || text.length > 200) continue;
+
+      let href: URL;
+      try {
+        href = new URL(anchor.href, document.baseURI);
+      } catch {
+        continue;
+      }
+      if (href.origin !== location.origin) continue;
+      if (seen.has(anchor.href)) continue;
+
+      seen.add(anchor.href);
+      items.push({ title: text, url: anchor.href });
+    }
+
+    return items;
+  }
+
   /**
    * Heuristic playlist detection, scoped to findScopedContainer(): group
    * same-origin links (excluding nav/header/footer) by their parent's
    * tag+class "signature", then pick the largest group with enough
    * distinct, non-trivial entries to plausibly be a lesson/episode list.
    * Site-specific and imperfect by nature — good enough for typical
-   * course-site sidebars, but not guaranteed on arbitrary layouts.
+   * course-site sidebars, but not guaranteed on arbitrary layouts. This is
+   * only the fallback: see storedSelector below for the reliable path.
    */
-  function collectPlaylistLinks(): PlaylistItem[] {
+  function collectPlaylistLinksHeuristic(): PlaylistItem[] {
     const scope = findScopedContainer();
     const anchors = Array.from(scope.querySelectorAll<HTMLAnchorElement>("a[href]"));
     const buckets = new Map<string, HTMLAnchorElement[]>();
@@ -109,6 +138,104 @@ if (!window.__videoDownloaderInjected) {
 
     return items;
   }
+
+  // The blind heuristic above can't reliably find every site's playlist
+  // (e.g. when the lesson list isn't a DOM ancestor of the <video>, or when
+  // it picks up an unrelated link cluster like a "who to follow" sidebar).
+  // storedSelector is a manually-picked override (see startPicking below),
+  // persisted per-origin, that takes precedence when present.
+  let storedSelector: string | null = null;
+
+  chrome.storage.local.get(storageKey).then((result) => {
+    storedSelector = result[storageKey] ?? null;
+    if (storedSelector) reportPlaylist();
+  });
+
+  function collectPlaylistLinks(): PlaylistItem[] {
+    if (storedSelector) {
+      const container = document.querySelector(storedSelector);
+      if (container) return extractLinksFromContainer(container);
+    }
+    return collectPlaylistLinksHeuristic();
+  }
+
+  // --- Manual playlist picker ---------------------------------------------
+  // Triggered from the popup ("Pick playlist area"). Highlights whatever
+  // element is under the cursor; clicking one records a CSS selector for it
+  // (preferring an id, else a short, verified-unique tag+class path) and
+  // stores it per-origin so future visits use it directly instead of
+  // guessing.
+
+  let pickerActive = false;
+  let hoveredEl: HTMLElement | null = null;
+
+  function buildSelector(el: Element): string {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+
+    const parts: string[] = [];
+    let current: Element | null = el;
+    while (current && current !== document.body && parts.length < 6) {
+      let part = current.tagName.toLowerCase();
+      if (typeof current.className === "string" && current.className.trim()) {
+        const classes = current.className.trim().split(/\s+/).filter(Boolean).slice(0, 2);
+        if (classes.length) part += "." + classes.map((c) => CSS.escape(c)).join(".");
+      }
+      parts.unshift(part);
+      const selector = parts.join(" > ");
+      if (document.querySelectorAll(selector).length === 1) return selector;
+      current = current.parentElement;
+    }
+    return parts.join(" > ");
+  }
+
+  function onPickerMouseOver(e: MouseEvent) {
+    if (hoveredEl) hoveredEl.style.outline = "";
+    hoveredEl = e.target as HTMLElement;
+    hoveredEl.style.outline = "2px solid #2684ff";
+  }
+
+  function onPickerClick(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.target as Element;
+    const selector = buildSelector(target);
+    storedSelector = selector;
+    chrome.storage.local.set({ [storageKey]: selector });
+    stopPicking();
+    reportPlaylist();
+  }
+
+  function startPicking() {
+    if (pickerActive) return;
+    pickerActive = true;
+    document.addEventListener("mouseover", onPickerMouseOver, true);
+    document.addEventListener("click", onPickerClick, true);
+    document.body.style.cursor = "crosshair";
+  }
+
+  function stopPicking() {
+    pickerActive = false;
+    document.removeEventListener("mouseover", onPickerMouseOver, true);
+    document.removeEventListener("click", onPickerClick, true);
+    document.body.style.cursor = "";
+    if (hoveredEl) {
+      hoveredEl.style.outline = "";
+      hoveredEl = null;
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if ((message as StartPickingRequest)?.type === "start-picking") {
+      startPicking();
+      return;
+    }
+    if ((message as ClearPlaylistSelectorRequest)?.type === "clear-playlist-selector") {
+      storedSelector = null;
+      chrome.storage.local.remove(storageKey);
+      reportPlaylist();
+      return;
+    }
+  });
 
   let observer: MutationObserver | undefined;
 

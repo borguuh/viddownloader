@@ -13,6 +13,7 @@ import type {
 import { getDownloadableSources, isBlobOnly, startDownload } from "./downloads";
 import { ensureContentScriptInjected } from "./ensure-injected";
 import PlaylistPanel from "./PlaylistPanel";
+import PlaylistPicker from "./PlaylistPicker";
 import StreamPanel from "./StreamPanel";
 
 export default function App() {
@@ -75,6 +76,7 @@ export default function App() {
       )}
       {tabId !== null && <StreamPanel manifests={streams} tabId={tabId} />}
       <PlaylistPanel items={playlist} defaultFolderName={defaultFolderName} />
+      {tabId !== null && <PlaylistPicker tabId={tabId} />}
     </div>
   );
 }

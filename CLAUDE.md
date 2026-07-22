@@ -155,19 +155,50 @@ justify one. Android and iOS may end up sharing code with each other later
      the page's console with "Extension context invalidated") once its
      extension context is orphaned by a reload, instead of throwing
      uncaught on every DOM-mutation tick.
-6. **M6 — YouTube support**: explicitly out of scope for M1–M5. YouTube
-   doesn't serve a plain downloadable file or a standard `.m3u8`/`.mpd`
-   manifest for regular (non-live) video — it delivers separate video/audio
-   streams via its own internal player API (`googlevideo.com` URLs, often
-   behind signature/cipher logic embedded in page JS). Supporting it
-   properly means: extracting stream info from the page's player response,
-   handling signature deciphering, downloading video+audio separately, and
-   muxing them (needs bundling `ffmpeg.wasm`, a real dependency addition).
-   It's also brittle — YouTube changes this periodically, so it can break
-   and need maintenance. Treated as its own milestone, scoped in detail when
-   we get to it, deliberately after M5 is solid. Livestream HLS may
-   partially work already via the M4 HLS path — worth checking once M6
-   starts, before building bespoke extraction.
+   - Confirmed on X/Twitter (2026-07): a media grid page shows thumbnails
+     with duration overlays ("1:15", "2:04", etc.) but no actual `<video>`
+     element until an individual post is opened — "No video detected" there
+     is correct, not a bug. The playlist/batch-queue feature (open a URL in
+     a hidden tab, wait for a `<video>` src, download, close) doesn't apply
+     to that page shape at all: X's video is lazy/click-to-play and
+     MSE/`blob:`-backed, so queued tabs just time out. **User has clarified
+     this round: full X/LinkedIn/YouTube support is not optional long-term
+     — it's explicitly deferred into M6 below (scope widened from
+     "YouTube support" to "MSE/blob-based platforms" generally, since X and
+     LinkedIn hit the identical technical wall), not dropped.** Until M6,
+     the active priority stays the course site's actual playlist.
+
+   **Round 4 — building the manual playlist picker** *(in progress)*: the
+   blind DOM heuristic has now failed on both the real course site (lesson
+   list isn't a `<video>` ancestor) and arbitrary sites (X's "who to
+   follow" sidebar, LinkedIn's game/analytics links) — confirms it's not a
+   reliable general solution. Building the previously-planned override:
+   user clicks "Pick playlist area" in the popup, the content script enters
+   an element-picker mode (hover highlight, click to confirm) on the actual
+   page, and the chosen container's links become the playlist directly (no
+   more bucket-guessing) — persisted per-origin in `chrome.storage.local`
+   so it's remembered on future visits to that site. Falls back to the
+   heuristic when no selector has been picked yet for the current origin.
+6. **M6 — MSE/blob-based platforms (YouTube, X/Twitter, LinkedIn, similar)**:
+   explicitly out of scope for M1–M5, but **confirmed non-negotiable for
+   the long run** — just deliberately deferred until M5 (course-site
+   reliability) is solid. These sites don't serve a plain downloadable file
+   or even a standard `.m3u8`/`.mpd` manifest for regular video — playback
+   goes through Media Source Extensions (`blob:` URLs, which M5 already
+   detects and explains rather than offering a doomed download for) fed by
+   each site's own internal, often signed/enciphered chunk-fetching scheme
+   (YouTube's player API + `googlevideo.com` URLs is the best-known example,
+   but X and LinkedIn are structurally the same problem, just with their
+   own internal APIs). Supporting this properly means, per site: extracting
+   real stream URLs from the page's internal player data, handling any
+   signature/cipher logic, downloading video+audio separately where they're
+   split, and muxing them (likely `ffmpeg.wasm`, a real new dependency).
+   It's also inherently brittle — these sites change their internal APIs
+   periodically, so this can break and need maintenance over time; that's
+   accepted as the cost of supporting them. Treated as its own milestone,
+   scoped in detail per-site when we get to it. Livestream HLS may already
+   partially work today via the M4 HLS path on some of these — worth
+   checking before building bespoke extraction for any given site.
 7. **M7+ — Mobile**: Android app (Kotlin or React Native — decide when this
    starts), iOS afterward.
 

@@ -13,16 +13,34 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   guard so it's safe to inject twice — needed because the popup injects
   this script on demand (see `ensure-injected.ts` below) rather than relying
   only on the manifest's automatic injection into freshly-navigated tabs.
-  Also runs `collectPlaylistLinks()`, a heuristic that first narrows to
-  `findScopedContainer()` — the nearest ancestor of the `<video>` element
-  with ≥3 links, excluding `<nav>`/`<header>`/`<footer>` — then buckets
-  same-origin links within that scope by their parent's tag+class signature
-  and picks the largest bucket (≥3 distinct links) as the likely
-  lesson/episode list, sent as `playlist-detected`. Scoping to the area
-  around the player (rather than the whole page) is what keeps this from
-  picking up sitewide nav menus as if they were playlist items. Still
-  fuzzy by nature — works for typical course-site layouts, not guaranteed
-  on arbitrary ones.
+  Playlist detection (`collectPlaylistLinks()`) has two paths, tried in
+  order:
+  1. **A manually-picked selector** (`storedSelector`, loaded from
+     `chrome.storage.local` under `playlistSelector:<origin>`) — if the user
+     has run the picker for this origin (see below), its saved container is
+     queried directly (`extractLinksFromContainer`) and used as-is. This is
+     the reliable path.
+  2. **A blind DOM heuristic fallback** (`collectPlaylistLinksHeuristic`),
+     used only when no selector is stored yet: narrows to
+     `findScopedContainer()` — the nearest ancestor of the `<video>` element
+     with ≥3 links, excluding `<nav>`/`<header>`/`<footer>` — then buckets
+     same-origin links within that scope by their parent's tag+class
+     signature and picks the largest bucket (≥3 distinct links). Confirmed
+     unreliable in practice on real sites (misses lesson lists that aren't a
+     DOM ancestor of the video; picks up unrelated link clusters like a
+     "who to follow" sidebar on other sites) — it's a best-effort guess, not
+     something to keep tuning indefinitely. The manual picker is the actual
+     fix.
+  - **Manual playlist picker**: triggered by a `start-picking` message from
+    the popup. Adds a capturing `mouseover` listener that outlines whatever
+    element is under the cursor, and a capturing `click` listener
+    (`preventDefault`/`stopPropagation`, so it doesn't navigate) that
+    computes a selector for the clicked element via `buildSelector()` —
+    prefers `id`, otherwise walks up building a `tag.class` path until
+    `document.querySelectorAll(selector).length === 1` confirms uniqueness
+    — then saves it to `chrome.storage.local` and re-runs detection
+    immediately. A `clear-playlist-selector` message removes the saved
+    selector and falls back to the heuristic again.
 - **Background service worker** (`src/background/index.ts`): caches the
   last-known video list and playlist per tab id, answers `get-videos`/
   `get-playlist` requests from the popup. Also owns the **batch download
@@ -46,7 +64,12 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   (`getDownloadableSources`, `isBlobOnly`) but **the actual download call
   is routed through the background worker** via a `download-video` message
   rather than calling `chrome.downloads.download()` directly from the
-  popup — see Download paths below for why.
+  popup — see Download paths below for why. `PlaylistPicker.tsx` renders
+  "Pick playlist area on page" / "Clear saved area" buttons — shown
+  unconditionally (unlike `PlaylistPanel`, which hides itself when nothing's
+  detected yet), since picking is exactly what you need when detection comes
+  up empty or wrong. Clicking "Pick" sends `start-picking` to the content
+  script and closes the popup so the user can click the actual page.
 - **Shared types** (`src/shared/types.ts`): message/data contracts used by
   all three pieces above. Keep this the single source of truth for message
   shapes — don't inline ad-hoc message objects elsewhere.
@@ -132,11 +155,17 @@ open the popup on a page with a `<video>` element.
 
 ## Known limitations to revisit
 
-- Playlist detection is a generic DOM heuristic, not per-site. If a
-  particular course site doesn't get picked up, the fix is almost always in
-  `collectPlaylistLinks()`/`findScopedContainer()` (e.g. adjust the minimum
-  bucket size, the scoping walk-up logic, or the signature used to group
-  anchors) rather than the queue/download logic.
+- Playlist detection now prefers a manually-picked per-origin selector over
+  the blind heuristic (see Architecture above) — if a site still doesn't
+  work, pick its playlist container directly rather than tuning
+  `collectPlaylistLinksHeuristic()`/`findScopedContainer()` further; that
+  heuristic is a last-resort fallback, not something worth perfecting.
+- `buildSelector()`'s uniqueness check (`querySelectorAll(selector).length
+  === 1`) can produce a selector that stops matching after the page
+  re-renders with different generated class names (common in some frontend
+  frameworks) — if a picked selector "stops working" after a while, the fix
+  is re-picking, not chasing selector robustness indefinitely for a
+  personal tool.
 - There's a small race in the popup: `ensureContentScriptInjected` resolves
   once the script has run synchronously, but the `videos-detected` message
   it sends is still an async dispatch to the background worker, so a
@@ -175,8 +204,10 @@ open the popup on a page with a `<video>` element.
 
 ## Roadmap position
 
-Milestones 1–4 are done, M5 is in progress (folder structure + the reload/
-playlist-scope/YouTube-not-supported bugs found in real testing — see root
-`CLAUDE.md`). Still open for M5: options page, download history, better
-error handling for blocked/CORS edge cases. YouTube support is its own
-milestone (M6), deliberately not attempted yet.
+Milestones 1–4 are done, M5 is in progress (folder structure ✅, blob-URL
+guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅ — see
+root `CLAUDE.md` for the full round-by-round history). Still open for M5:
+per-video overlay download buttons, options page, download history, better
+error handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —
+YouTube, X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
+deliberately deferred until M5 is solid.

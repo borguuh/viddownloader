@@ -105,3 +105,13 @@ export interface OffscreenRevokeRequest {
   type: "offscreen-revoke";
   url: string;
 }
+
+/** Tells the content script to enter element-picker mode: hover-highlight, click to confirm. */
+export interface StartPickingRequest {
+  type: "start-picking";
+}
+
+/** Tells the content script to forget the picked playlist container for the current origin. */
+export interface ClearPlaylistSelectorRequest {
+  type: "clear-playlist-selector";
+}
