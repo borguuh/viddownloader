@@ -22,8 +22,9 @@ import type {
   VideosDetectedMessage,
 } from "../shared/types";
 import { buildManifest, detectKindFromUrl, parseHlsSegments } from "./streams";
-import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
+import { buildDownloadPath, DEFAULT_BASE_FOLDER, suggestFilenameFromUrl } from "../shared/download-paths";
 import { blobToBase64 } from "../shared/base64";
+import { BASE_FOLDER_NAME_KEY } from "../shared/settings";
 
 const videosByTab = new Map<number, DetectedVideo[]>();
 const playlistByTab = new Map<number, GetPlaylistResponse>();
@@ -35,6 +36,18 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   playlistByTab.delete(tabId);
   streamsByTab.delete(tabId);
   clickSeriesProgressByTab.delete(tabId);
+});
+
+// Configurable via the options page; defaults to DEFAULT_BASE_FOLDER until
+// (and unless) the user changes it there.
+let baseFolderName = DEFAULT_BASE_FOLDER;
+chrome.storage.local.get(BASE_FOLDER_NAME_KEY).then((result) => {
+  if (result[BASE_FOLDER_NAME_KEY]) baseFolderName = result[BASE_FOLDER_NAME_KEY];
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes[BASE_FOLDER_NAME_KEY]) {
+    baseFolderName = changes[BASE_FOLDER_NAME_KEY].newValue || DEFAULT_BASE_FOLDER;
+  }
 });
 
 // --- Centralized download path enforcement ---------------------------------
@@ -175,7 +188,7 @@ function tryDownloadFromQueueTab(tabId: number, videos: DetectedVideo[]) {
   downloadedForTab.add(tabId);
   const folderName = folderNameForTab.get(tabId);
   const filename = suggestFilenameFromUrl(video.src, `${tabId}.mp4`);
-  downloadWithPath(video.src, buildDownloadPath(filename, folderName), () => finishTab(tabId));
+  downloadWithPath(video.src, buildDownloadPath(filename, baseFolderName, folderName), () => finishTab(tabId));
 }
 
 // --- HLS variant download --------------------------------------------------
@@ -238,7 +251,7 @@ async function downloadHlsVariant(variantUrl: string) {
       chunks.push(await segmentResponse.blob());
     }
 
-    await downloadBlobParts(chunks, "video/mp2t", buildDownloadPath("video.ts"));
+    await downloadBlobParts(chunks, "video/mp2t", buildDownloadPath("video.ts", baseFolderName));
   } catch (error) {
     notifyFailure("Stream download failed", error);
   }
@@ -307,8 +320,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "download-video") {
-    const { url, filename } = message as DownloadVideoRequest;
-    downloadWithPath(url, filename);
+    const { url, filename, seriesFolder } = message as DownloadVideoRequest;
+    downloadWithPath(url, buildDownloadPath(filename, baseFolderName, seriesFolder));
     return;
   }
 

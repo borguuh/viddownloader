@@ -11,7 +11,8 @@ import type {
   StartPickingRequest,
   VideosDetectedMessage,
 } from "../shared/types";
-import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
+import { suggestFilenameFromUrl } from "../shared/download-paths";
+import { OVERLAY_BUTTONS_ENABLED_KEY, PLAYLIST_SELECTOR_PREFIX } from "../shared/settings";
 
 declare global {
   interface Window {
@@ -27,7 +28,7 @@ if (!window.__videoDownloaderInjected) {
   window.__videoDownloaderInjected = true;
 
   const isChromeUi = (el: Element) => el.closest("nav, header, footer") !== null;
-  const storageKey = `playlistSelector:${location.origin}`;
+  const storageKey = `${PLAYLIST_SELECTOR_PREFIX}${location.origin}`;
 
   function collectVideos(): DetectedVideo[] {
     const videos = Array.from(document.querySelectorAll("video"));
@@ -46,6 +47,114 @@ if (!window.__videoDownloaderInjected) {
       };
     });
   }
+
+  // --- Per-video overlay download button -----------------------------------
+  // A small floating "Download" button positioned over each <video> that has
+  // a real (non-blob) src — useful when a page has multiple videos and the
+  // popup list alone doesn't make it obvious which is which. Positioned with
+  // `fixed` + a synced bounding rect rather than inserted into the page's own
+  // layout, so it can't break site CSS.
+
+  let overlayButtonsEnabled = true;
+  chrome.storage.local.get(OVERLAY_BUTTONS_ENABLED_KEY).then((result) => {
+    const stored = result[OVERLAY_BUTTONS_ENABLED_KEY];
+    overlayButtonsEnabled = stored === undefined ? true : stored;
+    syncOverlays();
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !(OVERLAY_BUTTONS_ENABLED_KEY in changes)) return;
+    overlayButtonsEnabled = changes[OVERLAY_BUTTONS_ENABLED_KEY].newValue ?? true;
+    syncOverlays();
+  });
+
+  const overlaysByVideo = new Map<HTMLVideoElement, HTMLButtonElement>();
+
+  function createOverlayButton(video: HTMLVideoElement): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.textContent = "⬇ Download";
+    btn.title = "Download this video";
+    Object.assign(btn.style, {
+      position: "fixed",
+      zIndex: "2147483647",
+      background: "#2684ff",
+      color: "#fff",
+      border: "none",
+      borderRadius: "4px",
+      padding: "4px 8px",
+      fontSize: "12px",
+      fontFamily: "system-ui, sans-serif",
+      cursor: "pointer",
+      boxShadow: "0 1px 4px rgba(0,0,0,0.4)",
+    } satisfies Partial<CSSStyleDeclaration>);
+
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const src = video.currentSrc || video.src;
+      if (!src || src.startsWith("blob:")) return;
+      const filename = suggestFilenameFromUrl(src, "video.mp4");
+      const request: DownloadVideoRequest = { type: "download-video", url: src, filename };
+      sendIfContextValid(request);
+    });
+
+    document.body.appendChild(btn);
+    return btn;
+  }
+
+  function positionOverlay(video: HTMLVideoElement, btn: HTMLButtonElement) {
+    const rect = video.getBoundingClientRect();
+    const onScreen = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+    btn.style.display = onScreen ? "block" : "none";
+    if (!onScreen) return;
+    btn.style.top = `${Math.max(rect.top + 6, 6)}px`;
+    btn.style.left = `${Math.max(rect.right - btn.offsetWidth - 6, 6)}px`;
+  }
+
+  function syncOverlays() {
+    const videos = Array.from(document.querySelectorAll("video"));
+    const seen = new Set<HTMLVideoElement>();
+
+    for (const video of videos) {
+      const src = video.currentSrc || video.src;
+      const downloadable = overlayButtonsEnabled && !!src && !src.startsWith("blob:");
+
+      if (!downloadable) {
+        const existing = overlaysByVideo.get(video);
+        if (existing) {
+          existing.remove();
+          overlaysByVideo.delete(video);
+        }
+        continue;
+      }
+
+      seen.add(video);
+      let btn = overlaysByVideo.get(video);
+      if (!btn) {
+        btn = createOverlayButton(video);
+        overlaysByVideo.set(video, btn);
+      }
+      positionOverlay(video, btn);
+    }
+
+    for (const [video, btn] of overlaysByVideo) {
+      if (!seen.has(video)) {
+        btn.remove();
+        overlaysByVideo.delete(video);
+      }
+    }
+  }
+
+  let repositionScheduled = false;
+  function scheduleReposition() {
+    if (repositionScheduled) return;
+    repositionScheduled = true;
+    requestAnimationFrame(() => {
+      repositionScheduled = false;
+      for (const [video, btn] of overlaysByVideo) positionOverlay(video, btn);
+    });
+  }
+  window.addEventListener("scroll", scheduleReposition, { capture: true, passive: true });
+  window.addEventListener("resize", scheduleReposition, { passive: true });
 
   /**
    * Finds the nearest ancestor of the primary <video> element that contains
@@ -304,7 +413,8 @@ if (!window.__videoDownloaderInjected) {
         const request: DownloadVideoRequest = {
           type: "download-video",
           url: src,
-          filename: buildDownloadPath(filename, folderName),
+          filename,
+          seriesFolder: folderName,
         };
         sendIfContextValid(request);
       }
@@ -360,6 +470,7 @@ if (!window.__videoDownloaderInjected) {
   const reportVideos = () => {
     const videos = collectVideos();
     sendIfContextValid({ type: "videos-detected", videos });
+    syncOverlays();
   };
 
   const reportPlaylist = () => {

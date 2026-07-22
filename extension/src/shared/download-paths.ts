@@ -1,5 +1,5 @@
-/** Every download from this extension lands under this subfolder of the default Downloads folder. */
-export const BASE_FOLDER = "Downloader";
+/** Default base subfolder (under the default Downloads folder) for every download from this extension. */
+export const DEFAULT_BASE_FOLDER = "Downloader";
 
 export function suggestFilenameFromUrl(url: string, fallback: string): string {
   try {
@@ -17,9 +17,14 @@ export function sanitizeFolderName(name: string): string {
   return cleaned || "series";
 }
 
-/** Builds the chrome.downloads filename: Downloader/<file> or Downloader/<series>/<file>. */
-export function buildDownloadPath(filename: string, seriesFolder?: string): string {
-  const parts = [BASE_FOLDER];
+/**
+ * Builds the chrome.downloads filename: <baseFolder>/<file> or
+ * <baseFolder>/<series>/<file>. Only called from the background worker
+ * (which owns the configurable base folder setting) — other contexts send
+ * raw filenames via messages and let the background worker apply this.
+ */
+export function buildDownloadPath(filename: string, baseFolder: string, seriesFolder?: string): string {
+  const parts = [baseFolder];
   if (seriesFolder) parts.push(sanitizeFolderName(seriesFolder));
   parts.push(filename);
   return parts.join("/");

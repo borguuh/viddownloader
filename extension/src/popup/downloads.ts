@@ -1,5 +1,5 @@
 import type { DetectedVideo, DownloadVideoRequest } from "../shared/types";
-import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
+import { suggestFilenameFromUrl } from "../shared/download-paths";
 
 export interface DownloadableSource {
   url: string;
@@ -33,12 +33,13 @@ export function startDownload(source: DownloadableSource): void {
   // Routed through the background worker (rather than calling
   // chrome.downloads.download directly here) so the single
   // onDeterminingFilename listener registered there — the reliable way to
-  // enforce our Downloader/ path even if another installed extension also
-  // hooks that event — applies to every download this extension makes.
+  // enforce the configured base folder even if another installed extension
+  // also hooks that event — applies to every download this extension makes.
+  // filename here is raw; the background worker applies the base folder.
   const request: DownloadVideoRequest = {
     type: "download-video",
     url: source.url,
-    filename: buildDownloadPath(source.filename),
+    filename: source.filename,
   };
   chrome.runtime.sendMessage(request);
 }

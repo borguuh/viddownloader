@@ -118,7 +118,9 @@ export interface DownloadStreamRequest {
 export interface DownloadVideoRequest {
   type: "download-video";
   url: string;
+  /** Raw filename — the background worker applies the configured base folder (and optional series folder). */
   filename: string;
+  seriesFolder?: string;
 }
 
 export interface OffscreenCreateBlobRequest {
