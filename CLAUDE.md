@@ -67,6 +67,60 @@ justify one. Android and iOS may end up sharing code with each other later
      `<nav>`/`<header>`/`<footer>` regions.
    - Options page, download history, and further error handling for
      blocked/CORS edge cases are still open for this milestone.
+
+   **Round 2 findings (real testing against course site, Twitter, LinkedIn):**
+   - `Downloader/` subfolder still not applying per user report — code
+     inspection shows `buildDownloadPath()` is wired correctly everywhere;
+     first suspect is a stale unpacked-extension reload (MV3 service workers
+     can keep running old code until the extension is explicitly reloaded
+     in `chrome://extensions`, not just rebuilt). Needs a rebuild + hard
+     reload + retest before treating this as a real bug.
+   - Playlist detection still fails on the actual course site even after
+     the M5 scoping fix — the lesson list apparently isn't a DOM ancestor
+     of the `<video>` element on this site, so `findScopedContainer()`'s
+     "walk up from the video" approach never reaches it. A blind DOM
+     heuristic keeps being a dead end for this specific, real use case.
+     **Planned fix — manual playlist picker**: add a "Pick playlist area"
+     mode where the user clicks the actual sidebar/list container on the
+     page (element-picker UX, like an ad-blocker's element chooser); the
+     extension stores that container's selector per-origin in
+     `chrome.storage.local` and prefers it over the blind heuristic on
+     future visits to that site. Directly addresses the user's own framing
+     of this ("a way to select the video such that it recognizes the next
+     videos in a playlist").
+   - Twitter: HLS variants are detected correctly (multiple resolutions
+     listed), but clicking Download does nothing — no error, no download.
+     `downloadHlsVariant()` is fired-and-forgotten from the message handler
+     with no `try/catch` and no error surfaced to the popup, so any fetch
+     failure (e.g. Twitter's CDN rejecting segment requests without the
+     original page's `Referer`/`Origin`, which `fetch()` can't spoof — the
+     `Referer` header can't be set manually via `fetch()`, only via
+     `chrome.declarativeNetRequest` header-rewrite rules) fails completely
+     silently. **Planned fix**: wrap the download flow in `try/catch` and
+     surface failures via `chrome.notifications`, so at minimum the user
+     sees *that* and roughly *why* it failed instead of nothing happening.
+     Actually fixing CDN hotlink/referrer rejection (if that's the cause)
+     is a separate, bigger follow-up via `declarativeNetRequest`.
+   - LinkedIn: clicking Download on a detected "video" produces a
+     `Failed - Network error` entry pointing at a `blob:` URL. Root cause:
+     LinkedIn (like YouTube) feeds video through Media Source Extensions,
+     so `video.currentSrc` is a `blob:` URL scoped to the page's own
+     browsing context — it was never a real fetchable file, and
+     `chrome.downloads.download()` can't resolve it from the extension.
+     M2's direct-download path doesn't currently distinguish "real URL" vs
+     "MSE blob URL" and just offers a Download button either way.
+     **Planned fix**: detect `blob:` sources in `getDownloadableSources()`
+     and don't offer a (guaranteed-to-fail) download button for them; show
+     a short explanation instead ("this video streams in-page and can't be
+     downloaded directly — check Adaptive stream below" if a matching HLS/
+     DASH manifest was also detected, since some MSE sites are backed by a
+     real HLS/DASH stream `M4` can already catch).
+   - New feature request: when a page has multiple videos, add a small
+     "Download this video" button overlaid directly on/near each `<video>`
+     element on the page itself (IDM-style), not just a list in the popup —
+     makes it unambiguous which one you're grabbing. Content script would
+     position a floating button per detected `<video>`, wired to the same
+     M2 download logic for that specific element's source.
 6. **M6 — YouTube support**: explicitly out of scope for M1–M5. YouTube
    doesn't serve a plain downloadable file or a standard `.m3u8`/`.mpd`
    manifest for regular (non-live) video — it delivers separate video/audio
