@@ -197,7 +197,17 @@ justify one. Android and iOS may end up sharing code with each other later
    `<video>` for its source to change, downloads what it finds (skipping
    items that time out — quizzes and the like, with no need to hardcode
    that class name), and moves to the next. See extension `CLAUDE.md` for
-   the implementation (`classifyAnchors`, `runClickSeries`).
+   the implementation (`classifyAnchors`, `runClickSeries`). **Confirmed
+   working on the real course site.**
+
+   **Still open for M5** (next up): a visible **progress indicator** for
+   both download flows — right now a batch/series download (`navigate`
+   queue or `click` series) runs with zero feedback in the popup UI beyond
+   files eventually landing in Downloads; for a 35-lecture course that's a
+   long silent wait with no way to tell it's working vs. stuck. Also still
+   open: per-video overlay download buttons on multi-video pages, options
+   page, download history, better error handling for blocked/CORS edge
+   cases.
 6. **M6 — MSE/blob-based platforms (YouTube, X/Twitter, LinkedIn, similar)**:
    explicitly out of scope for M1–M5, but **confirmed non-negotiable for
    the long run** — just deliberately deferred until M5 (course-site
