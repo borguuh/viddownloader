@@ -197,6 +197,16 @@ needed) using the shared keys in `src/shared/settings.ts`:
   (via `chrome.storage.local.get(null)`, filtered by prefix) with a
   "Forget" button per entry — the same effect as clicking "Clear saved
   area" in the popup, but reachable for sites you're not currently on.
+- **Download history**: the background worker tracks every download id it
+  initiates (`ourDownloadIds`, set inside `downloadWithPath()`), and
+  `chrome.downloads.onChanged` records an entry (`{ filename, url,
+  timestamp }`, most-recent-first, capped at `MAX_HISTORY_ENTRIES`) once
+  that download's `state` reaches `"complete"` — deliberately *not* at
+  initiation time, so failed/cancelled downloads don't pollute history.
+  `chrome.downloads.search({ id })` supplies the final on-disk `filename`
+  (an absolute path — the options page shows just the basename via
+  `basename()`, for display only). Stored under `DOWNLOAD_HISTORY_KEY`;
+  "Clear history" just removes that key.
 
 ## Permissions
 
@@ -321,8 +331,8 @@ Milestones 1–4 are done, M5 is in progress (folder structure ✅, blob-URL
 guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅,
 click-driven ("single-page", no per-lesson URL) playlist support ✅,
 progress indicator for both batch flows ✅, per-video overlay download
-buttons ✅, options page ✅ — see root `CLAUDE.md` for the full
-round-by-round history). Still open for M5: download history, better
-error handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —
+buttons ✅, options page ✅, download history ✅ — see root `CLAUDE.md` for
+the full round-by-round history). Still open for M5: better error
+handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —
 YouTube, X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
 deliberately deferred until M5 is solid.

@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { DEFAULT_BASE_FOLDER } from "../shared/download-paths";
-import { BASE_FOLDER_NAME_KEY, OVERLAY_BUTTONS_ENABLED_KEY, PLAYLIST_SELECTOR_PREFIX } from "../shared/settings";
+import {
+  BASE_FOLDER_NAME_KEY,
+  DOWNLOAD_HISTORY_KEY,
+  OVERLAY_BUTTONS_ENABLED_KEY,
+  PLAYLIST_SELECTOR_PREFIX,
+} from "../shared/settings";
+import type { HistoryEntry } from "../shared/settings";
 
 export default function App() {
   return (
@@ -9,6 +15,7 @@ export default function App() {
       <BaseFolderSetting />
       <OverlayToggleSetting />
       <PlaylistSelectors />
+      <DownloadHistory />
     </div>
   );
 }
@@ -124,6 +131,51 @@ function PlaylistSelectors() {
                 <div style={{ color: "#888", fontSize: 11, wordBreak: "break-all" }}>{entry.selector}</div>
               </div>
               <button onClick={() => forget(entry.origin)}>Forget</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function basename(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.substring(normalized.lastIndexOf("/") + 1);
+}
+
+function DownloadHistory() {
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+
+  const load = () => {
+    chrome.storage.local.get(DOWNLOAD_HISTORY_KEY).then((result) => {
+      setEntries(result[DOWNLOAD_HISTORY_KEY] ?? []);
+    });
+  };
+
+  useEffect(load, []);
+
+  const clear = () => {
+    chrome.storage.local.remove(DOWNLOAD_HISTORY_KEY).then(load);
+  };
+
+  return (
+    <section>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h2>Download history</h2>
+        {entries.length > 0 && <button onClick={clear}>Clear history</button>}
+      </div>
+      {entries.length === 0 ? (
+        <p style={{ fontSize: 13, color: "#888" }}>No downloads recorded yet.</p>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, maxHeight: 300, overflowY: "auto" }}>
+          {entries.map((entry, index) => (
+            <li
+              key={`${entry.timestamp}-${index}`}
+              style={{ fontSize: 13, padding: "4px 0", borderBottom: "1px solid #eee" }}
+            >
+              <div style={{ wordBreak: "break-all" }}>{basename(entry.filename)}</div>
+              <div style={{ color: "#888", fontSize: 11 }}>{new Date(entry.timestamp).toLocaleString()}</div>
             </li>
           ))}
         </ul>

@@ -24,7 +24,8 @@ import type {
 import { buildManifest, detectKindFromUrl, parseHlsSegments } from "./streams";
 import { buildDownloadPath, DEFAULT_BASE_FOLDER, suggestFilenameFromUrl } from "../shared/download-paths";
 import { blobToBase64 } from "../shared/base64";
-import { BASE_FOLDER_NAME_KEY } from "../shared/settings";
+import { BASE_FOLDER_NAME_KEY, DOWNLOAD_HISTORY_KEY, MAX_HISTORY_ENTRIES } from "../shared/settings";
+import type { HistoryEntry } from "../shared/settings";
 
 const videosByTab = new Map<number, DetectedVideo[]>();
 const playlistByTab = new Map<number, GetPlaylistResponse>();
@@ -71,15 +72,46 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   }
 });
 
+// Tracks download ids this extension initiated, so chrome.downloads.onChanged
+// (which fires for every download in the browser, not just ours) knows which
+// ones to record into history.
+const ourDownloadIds = new Set<number>();
+
 function downloadWithPath(url: string, filename: string, callback?: (id?: number) => void) {
   pendingFilenames.set(url, filename);
   chrome.downloads.download({ url, filename }, (id) => {
     // If the download failed outright, onDeterminingFilename never fires for
     // it — clean up so we don't leak the entry.
-    if (id === undefined) pendingFilenames.delete(url);
+    if (id === undefined) {
+      pendingFilenames.delete(url);
+    } else {
+      ourDownloadIds.add(id);
+    }
     callback?.(id);
   });
 }
+
+async function recordHistory(entry: HistoryEntry) {
+  const result = await chrome.storage.local.get(DOWNLOAD_HISTORY_KEY);
+  const history: HistoryEntry[] = result[DOWNLOAD_HISTORY_KEY] ?? [];
+  history.unshift(entry);
+  history.length = Math.min(history.length, MAX_HISTORY_ENTRIES);
+  chrome.storage.local.set({ [DOWNLOAD_HISTORY_KEY]: history });
+}
+
+chrome.downloads.onChanged.addListener((delta) => {
+  if (!ourDownloadIds.has(delta.id)) return;
+
+  if (delta.state?.current === "complete") {
+    ourDownloadIds.delete(delta.id);
+    chrome.downloads.search({ id: delta.id }).then(([item]) => {
+      if (!item) return;
+      recordHistory({ filename: item.filename, url: item.url, timestamp: Date.now() });
+    });
+  } else if (delta.state?.current === "interrupted") {
+    ourDownloadIds.delete(delta.id);
+  }
+});
 
 // --- Adaptive stream (HLS/DASH) manifest detection ------------------------
 // Watch network requests for .m3u8/.mpd manifests, fetch + parse each one
