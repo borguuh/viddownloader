@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
-import type { DetectedVideo, GetVideosRequest, GetVideosResponse } from "../shared/types";
+import type {
+  DetectedVideo,
+  GetPlaylistRequest,
+  GetPlaylistResponse,
+  GetVideosRequest,
+  GetVideosResponse,
+  PlaylistItem,
+} from "../shared/types";
 import { getDownloadableSources, startDownload } from "./downloads";
+import PlaylistPanel from "./PlaylistPanel";
 
 export default function App() {
   const [videos, setVideos] = useState<DetectedVideo[]>([]);
+  const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -13,33 +22,41 @@ export default function App() {
         return;
       }
 
-      const request: GetVideosRequest = { type: "get-videos", tabId: tab.id };
-      chrome.runtime.sendMessage(request, (response: GetVideosResponse) => {
+      const videosRequest: GetVideosRequest = { type: "get-videos", tabId: tab.id };
+      chrome.runtime.sendMessage(videosRequest, (response: GetVideosResponse) => {
         setVideos(response?.videos ?? []);
         setLoading(false);
+      });
+
+      const playlistRequest: GetPlaylistRequest = { type: "get-playlist", tabId: tab.id };
+      chrome.runtime.sendMessage(playlistRequest, (response: GetPlaylistResponse) => {
+        setPlaylist(response?.items ?? []);
       });
     });
   }, []);
 
   if (loading) return <p>Scanning page for video…</p>;
 
-  if (videos.length === 0) {
-    return <p>No video detected on this page yet.</p>;
-  }
-
   return (
     <div>
-      <h3 style={{ margin: "0 0 8px" }}>Detected video</h3>
-      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-        {videos.map((video) => (
-          <li key={video.id} style={{ marginBottom: 12, fontSize: 13 }}>
-            <div style={{ marginBottom: 4 }}>
-              {video.width}×{video.height}
-            </div>
-            <VideoSources video={video} />
-          </li>
-        ))}
-      </ul>
+      {videos.length === 0 ? (
+        <p>No video detected on this page yet.</p>
+      ) : (
+        <div>
+          <h3 style={{ margin: "0 0 8px" }}>Detected video</h3>
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {videos.map((video) => (
+              <li key={video.id} style={{ marginBottom: 12, fontSize: 13 }}>
+                <div style={{ marginBottom: 4 }}>
+                  {video.width}×{video.height}
+                </div>
+                <VideoSources video={video} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <PlaylistPanel items={playlist} />
     </div>
   );
 }

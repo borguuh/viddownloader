@@ -8,10 +8,23 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
 - **Content script** (`src/content/detect-videos.ts`): runs on every page,
   queries `<video>` elements (and their `<source>` children), sends a
   `videos-detected` message to the background worker whenever the DOM
-  changes (via `MutationObserver`) or a video's metadata loads.
+  changes (debounced 300ms via `MutationObserver`) or a video's metadata
+  loads. Also runs `collectPlaylistLinks()`, a heuristic that buckets
+  same-origin `<a href>` elements by their parent's tag+class signature and
+  picks the largest bucket (≥3 distinct links) as the likely lesson/episode
+  list, sent as `playlist-detected`. This is inherently fuzzy — it works for
+  typical course-site sidebars but isn't guaranteed on arbitrary layouts.
 - **Background service worker** (`src/background/index.ts`): caches the
-  last-known video list per tab id. Answers `get-videos` requests from the
-  popup with the current tab's cached list.
+  last-known video list and playlist per tab id, answers `get-videos`/
+  `get-playlist` requests from the popup. Also owns the **batch download
+  queue**: on `enqueue-downloads`, it opens each playlist URL in a background
+  tab (`active: false`), waits for that tab's content script to report a
+  video with a usable `src`, downloads it, closes the tab, and moves to the
+  next item — fully sequential, with a 20s per-tab timeout
+  (`TAB_LOAD_TIMEOUT_MS`) in case a page never surfaces a video. Tabs
+  spawned this way are tracked in `queueTabIds` so their `videos-detected`
+  messages are treated differently from normal browsing tabs (auto-download
+  instead of just caching for the popup).
 - **Popup** (`src/popup/`): React + TS UI. On open, asks the background
   worker for the active tab's videos, lists them, and offers a download
   button per detected source (main `src` plus any `<source>` children,
@@ -41,6 +54,17 @@ open the popup on a page with a `<video>` element.
 
 ## Roadmap position
 
-Milestones 1 (detection) and 2 (direct-file download) are done — see root
-`CLAUDE.md`. Next up (M3) is series/batch detection across a course-site
-playlist and multi-select queued downloads.
+Milestones 1–3 are done — see root `CLAUDE.md`. Next up (M4) is adaptive
+streaming (HLS/DASH) support, since the queue/download path so far assumes
+a directly downloadable file URL per video.
+
+## Known limitations to revisit
+
+- Playlist detection is a generic DOM heuristic, not per-site. If a
+  particular course site doesn't get picked up, the fix is almost always in
+  `collectPlaylistLinks()` (e.g. adjust the minimum bucket size, or the
+  signature used to group anchors) rather than the queue/download logic.
+- The batch queue downloads the *first* video found with a `src` on each
+  opened page — it doesn't yet handle pages with multiple videos or let you
+  pick a resolution per queued item. Fine for now since most course lesson
+  pages have exactly one player.
