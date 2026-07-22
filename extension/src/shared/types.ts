@@ -49,3 +49,36 @@ export interface QueueStatusMessage {
   remaining: number;
   current: PlaylistItem | null;
 }
+
+export type StreamKind = "hls" | "dash";
+
+export interface StreamVariant {
+  /** e.g. "1920x1080", or "unknown" if the manifest didn't declare one */
+  resolution: string;
+  bandwidth: number;
+  url: string;
+}
+
+export interface StreamManifest {
+  kind: StreamKind;
+  masterUrl: string;
+  variants: StreamVariant[];
+  /** true once we've confirmed this extension can actually download this kind (HLS only, for now) */
+  downloadable: boolean;
+}
+
+export interface GetStreamsRequest {
+  type: "get-streams";
+  tabId: number;
+}
+
+export interface GetStreamsResponse {
+  manifests: StreamManifest[];
+}
+
+export interface DownloadStreamRequest {
+  type: "download-stream";
+  tabId: number;
+  variant: StreamVariant;
+  kind: StreamKind;
+}

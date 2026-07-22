@@ -38,9 +38,10 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
 
 ## Permissions
 
-- `activeTab`, `scripting`, `downloads`, `storage` — current milestone.
-- `webRequest`/`declarativeNetRequest` will be added in M4 for HLS/DASH
-  manifest interception — don't add until that milestone actually needs it.
+- `activeTab`, `scripting`, `downloads`, `storage`, `webRequest`, plus
+  `host_permissions: ["<all_urls>"]` — the last two exist specifically for
+  HLS/DASH manifest interception and cross-origin manifest/segment fetches
+  (see Adaptive streaming below).
 
 ## Build tooling
 
@@ -52,11 +53,32 @@ that folder via `chrome://extensions` → "Load unpacked" for manual testing.
 No automated test framework yet. Manual verification = load unpacked +
 open the popup on a page with a `<video>` element.
 
-## Roadmap position
+## Adaptive streaming (HLS/DASH)
 
-Milestones 1–3 are done — see root `CLAUDE.md`. Next up (M4) is adaptive
-streaming (HLS/DASH) support, since the queue/download path so far assumes
-a directly downloadable file URL per video.
+- **Detection** (`src/background/index.ts`, `chrome.webRequest.onBeforeRequest`):
+  watches network requests for `.m3u8`/`.mpd` URLs per tab, fetches and
+  parses each manifest once (`src/background/streams.ts`), caches the
+  result in `streamsByTab`. Requires the `webRequest` permission and
+  `host_permissions: ["<all_urls>"]` (added in M4) — extension-context
+  fetches with a matching host permission aren't subject to the page's CORS
+  restrictions, which is what lets us fetch cross-origin manifests/segments.
+- **HLS parsing** (`parseHlsMaster`): regex over `#EXT-X-STREAM-INF` lines
+  for `RESOLUTION`/`BANDWIDTH`, paired with the following URI line. If the
+  manifest has no `STREAM-INF` lines it's already a media (segment)
+  playlist, not a master — treated as a single "unknown" resolution variant.
+- **DASH parsing** (`parseDashMpd`): regex over `<Representation>` tags for
+  `width`/`height`/`bandwidth` attributes. This is **detection/display
+  only** — `StreamManifest.downloadable` is `false` for DASH, so the popup
+  shows variants but disables the download button. A real implementation
+  needs proper `BaseURL` inheritance and segment template resolution, which
+  regex-matching can't do reliably; revisit with a real XML parse if DASH
+  download support becomes worth the effort (service workers have no
+  `DOMParser`, so that'll mean pulling in a small XML parsing dependency).
+- **HLS download** (`downloadHlsVariant`): fetches the chosen variant
+  playlist, resolves every segment URL, fetches segments **sequentially**
+  (no parallelism, no progress UI — both worth adding later), concatenates
+  them into one `Blob`, and downloads via a `URL.createObjectURL()` handed
+  to `chrome.downloads.download()`.
 
 ## Known limitations to revisit
 
@@ -68,3 +90,20 @@ a directly downloadable file URL per video.
   opened page — it doesn't yet handle pages with multiple videos or let you
   pick a resolution per queued item. Fine for now since most course lesson
   pages have exactly one player.
+- HLS download concatenates segments as-is: works for MPEG-TS segments and
+  most fMP4/CMAF in practice, but **encrypted streams (`#EXT-X-KEY`) will
+  download without decryption** and likely won't play. Not handled — this
+  tool doesn't attempt DRM/encryption bypass by design (see root
+  `CLAUDE.md`).
+- Long HLS downloads (many sequential segment fetches) risk the MV3 service
+  worker being reclaimed mid-download on very long videos. Not yet
+  mitigated (e.g. with a keep-alive alarm) — revisit if it turns out to be
+  a real problem in practice.
+- No download progress indicator for streams or the batch queue — you only
+  see the result once it lands in Downloads.
+
+## Roadmap position
+
+Milestones 1–4 are done — see root `CLAUDE.md`. Next up (M5) is polish:
+options page, download history, and error handling for blocked/CORS edge
+cases.

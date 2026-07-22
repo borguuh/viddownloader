@@ -3,16 +3,22 @@ import type {
   DetectedVideo,
   GetPlaylistRequest,
   GetPlaylistResponse,
+  GetStreamsRequest,
+  GetStreamsResponse,
   GetVideosRequest,
   GetVideosResponse,
   PlaylistItem,
+  StreamManifest,
 } from "../shared/types";
 import { getDownloadableSources, startDownload } from "./downloads";
 import PlaylistPanel from "./PlaylistPanel";
+import StreamPanel from "./StreamPanel";
 
 export default function App() {
   const [videos, setVideos] = useState<DetectedVideo[]>([]);
   const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
+  const [streams, setStreams] = useState<StreamManifest[]>([]);
+  const [tabId, setTabId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -21,6 +27,7 @@ export default function App() {
         setLoading(false);
         return;
       }
+      setTabId(tab.id);
 
       const videosRequest: GetVideosRequest = { type: "get-videos", tabId: tab.id };
       chrome.runtime.sendMessage(videosRequest, (response: GetVideosResponse) => {
@@ -31,6 +38,11 @@ export default function App() {
       const playlistRequest: GetPlaylistRequest = { type: "get-playlist", tabId: tab.id };
       chrome.runtime.sendMessage(playlistRequest, (response: GetPlaylistResponse) => {
         setPlaylist(response?.items ?? []);
+      });
+
+      const streamsRequest: GetStreamsRequest = { type: "get-streams", tabId: tab.id };
+      chrome.runtime.sendMessage(streamsRequest, (response: GetStreamsResponse) => {
+        setStreams(response?.manifests ?? []);
       });
     });
   }, []);
@@ -56,6 +68,7 @@ export default function App() {
           </ul>
         </div>
       )}
+      {tabId !== null && <StreamPanel manifests={streams} tabId={tabId} />}
       <PlaylistPanel items={playlist} />
     </div>
   );
