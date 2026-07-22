@@ -41,7 +41,16 @@ justify one. Android and iOS may end up sharing code with each other later
    concat segments (likely `ffmpeg.wasm` for muxing) since no single
    downloadable file exists for these.
 5. **M5 — Polish**: options page, download history, error handling for
-   blocked/CORS cases and other edge-case sites.
+   blocked/CORS cases and other edge-case sites. Also: let the user name (or
+   pick from recent) a destination folder per playlist/series batch, so all
+   downloads from one "Download selected" action land together instead of
+   flat in the Downloads root. `chrome.downloads.download()` only accepts a
+   `filename` *relative to the default Downloads folder* (no arbitrary
+   absolute-path picker) — so the realistic version of this is a
+   user-provided subfolder name prefixed onto each `filename` in the batch
+   (e.g. `MyCourse/03-lesson-title.mp4`), not a native OS folder-picker
+   dialog. Worth confirming that's an acceptable tradeoff when this
+   milestone starts.
 6. **M6+ — Mobile**: Android app (Kotlin or React Native — decide when this
    starts), iOS afterward.
 
