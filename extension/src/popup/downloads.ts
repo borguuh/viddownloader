@@ -1,4 +1,4 @@
-import type { DetectedVideo } from "../shared/types";
+import type { DetectedVideo, DownloadVideoRequest } from "../shared/types";
 import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
 
 export interface DownloadableSource {
@@ -30,5 +30,15 @@ export function isBlobOnly(video: DetectedVideo): boolean {
 }
 
 export function startDownload(source: DownloadableSource): void {
-  chrome.downloads.download({ url: source.url, filename: buildDownloadPath(source.filename) });
+  // Routed through the background worker (rather than calling
+  // chrome.downloads.download directly here) so the single
+  // onDeterminingFilename listener registered there — the reliable way to
+  // enforce our Downloader/ path even if another installed extension also
+  // hooks that event — applies to every download this extension makes.
+  const request: DownloadVideoRequest = {
+    type: "download-video",
+    url: source.url,
+    filename: buildDownloadPath(source.filename),
+  };
+  chrome.runtime.sendMessage(request);
 }

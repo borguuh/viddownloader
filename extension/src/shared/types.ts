@@ -84,3 +84,9 @@ export interface DownloadStreamRequest {
   variant: StreamVariant;
   kind: StreamKind;
 }
+
+export interface DownloadVideoRequest {
+  type: "download-video";
+  url: string;
+  filename: string;
+}

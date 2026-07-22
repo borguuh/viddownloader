@@ -1,6 +1,7 @@
 import type {
   DetectedVideo,
   DownloadStreamRequest,
+  DownloadVideoRequest,
   EnqueueDownloadsRequest,
   GetPlaylistRequest,
   GetPlaylistResponse,
@@ -25,6 +26,37 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   playlistByTab.delete(tabId);
   streamsByTab.delete(tabId);
 });
+
+// --- Centralized download path enforcement ---------------------------------
+// Passing `filename` directly to chrome.downloads.download() is ignored if
+// ANY installed extension (not just this one) has registered an
+// onDeterminingFilename listener — a download manager, ad blocker, etc. can
+// silently override it. Registering our own listener and calling suggest()
+// is the API's actual mechanism for reliably controlling the save path, so
+// every download this extension makes goes through downloadWithPath() below
+// instead of calling chrome.downloads.download({ filename }) directly.
+
+const pendingFilenames = new Map<string, string>();
+
+chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+  const desired = pendingFilenames.get(item.url);
+  if (desired) {
+    pendingFilenames.delete(item.url);
+    suggest({ filename: desired, conflictAction: "uniquify" });
+  } else {
+    suggest();
+  }
+});
+
+function downloadWithPath(url: string, filename: string, callback?: (id?: number) => void) {
+  pendingFilenames.set(url, filename);
+  chrome.downloads.download({ url, filename }, (id) => {
+    // If the download failed outright, onDeterminingFilename never fires for
+    // it — clean up so we don't leak the entry.
+    if (id === undefined) pendingFilenames.delete(url);
+    callback?.(id);
+  });
+}
 
 // --- Adaptive stream (HLS/DASH) manifest detection ------------------------
 // Watch network requests for .m3u8/.mpd manifests, fetch + parse each one
@@ -119,9 +151,7 @@ function tryDownloadFromQueueTab(tabId: number, videos: DetectedVideo[]) {
   downloadedForTab.add(tabId);
   const folderName = folderNameForTab.get(tabId);
   const filename = suggestFilenameFromUrl(video.src, `${tabId}.mp4`);
-  chrome.downloads.download({ url: video.src, filename: buildDownloadPath(filename, folderName) }, () =>
-    finishTab(tabId),
-  );
+  downloadWithPath(video.src, buildDownloadPath(filename, folderName), () => finishTab(tabId));
 }
 
 // --- HLS variant download --------------------------------------------------
@@ -133,23 +163,39 @@ function tryDownloadFromQueueTab(tabId: number, videos: DetectedVideo[]) {
 // download but likely won't play; that's a known limitation, not handled yet.
 
 async function downloadHlsVariant(variantUrl: string) {
-  const playlistResponse = await fetch(variantUrl);
-  const playlistText = await playlistResponse.text();
-  const segmentUrls = parseHlsSegments(playlistText, variantUrl);
-  if (segmentUrls.length === 0) return;
+  try {
+    const playlistResponse = await fetch(variantUrl);
+    if (!playlistResponse.ok) throw new Error(`Playlist fetch failed: HTTP ${playlistResponse.status}`);
+    const playlistText = await playlistResponse.text();
+    const segmentUrls = parseHlsSegments(playlistText, variantUrl);
+    if (segmentUrls.length === 0) throw new Error("Playlist had no segments");
 
-  const chunks: BlobPart[] = [];
-  for (const segmentUrl of segmentUrls) {
-    const segmentResponse = await fetch(segmentUrl);
-    chunks.push(await segmentResponse.blob());
+    const chunks: BlobPart[] = [];
+    for (const segmentUrl of segmentUrls) {
+      const segmentResponse = await fetch(segmentUrl);
+      if (!segmentResponse.ok) throw new Error(`Segment fetch failed: HTTP ${segmentResponse.status}`);
+      chunks.push(await segmentResponse.blob());
+    }
+
+    const blob = new Blob(chunks, { type: "video/mp2t" });
+    const objectUrl = URL.createObjectURL(blob);
+
+    downloadWithPath(objectUrl, buildDownloadPath("video.ts"), () => {
+      // Revoke once the download has had time to read the blob.
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    });
+  } catch (error) {
+    notifyFailure("Stream download failed", error);
   }
+}
 
-  const blob = new Blob(chunks, { type: "video/mp2t" });
-  const objectUrl = URL.createObjectURL(blob);
-
-  chrome.downloads.download({ url: objectUrl, filename: buildDownloadPath("video.ts") }, () => {
-    // Revoke once the download has had time to read the blob.
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+function notifyFailure(title: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: "public/icons/icon128.png",
+    title,
+    message,
   });
 }
 
@@ -202,6 +248,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "download-stream") {
     const { variant, kind } = message as DownloadStreamRequest;
     if (kind === "hls") downloadHlsVariant(variant.url);
+    return;
+  }
+
+  if (message?.type === "download-video") {
+    const { url, filename } = message as DownloadVideoRequest;
+    downloadWithPath(url, filename);
     return;
   }
 });

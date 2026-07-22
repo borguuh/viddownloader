@@ -41,11 +41,12 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   `chrome.scripting.executeScript` if they aren't already running there —
   then asks the background worker for the active tab's videos/playlist/
   streams. Offers a download button per detected source (main `src` plus
-  any `<source>` children, deduplicated). Download logic lives in
-  `src/popup/downloads.ts` (`getDownloadableSources`, `startDownload`) —
-  call `chrome.downloads` directly from the popup rather than
-  round-tripping through the background worker, since popup pages already
-  have full extension API access.
+  any `<source>` children, deduplicated; `blob:` sources are excluded, see
+  below). Filename/source logic lives in `src/popup/downloads.ts`
+  (`getDownloadableSources`, `isBlobOnly`) but **the actual download call
+  is routed through the background worker** via a `download-video` message
+  rather than calling `chrome.downloads.download()` directly from the
+  popup — see Download paths below for why.
 - **Shared types** (`src/shared/types.ts`): message/data contracts used by
   all three pieces above. Keep this the single source of truth for message
   shapes — don't inline ad-hoc message objects elsewhere.
@@ -57,13 +58,27 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   from a text input in `PlaylistPanel` (defaults to the page title),
   carried through `EnqueueDownloadsRequest.folderName` and threaded through
   the background queue's `folderNameForTab` map per queued tab.
+  **Important**: passing `filename` straight to `chrome.downloads.download()`
+  is silently ignored if *any* installed extension (not just this one) has
+  registered a `chrome.downloads.onDeterminingFilename` listener — a
+  download manager, ad blocker, etc. can override it without erroring. The
+  reliable fix is for this extension to register its own
+  `onDeterminingFilename` listener and call `suggest()` with the desired
+  path — that's what `downloadWithPath()` in `src/background/index.ts`
+  does (tracking the desired path per URL in `pendingFilenames`, consumed
+  the moment Chrome asks). **Every download in this codebase must go
+  through `downloadWithPath()`** (in the background worker) rather than
+  calling `chrome.downloads.download()` directly — that's why the popup
+  sends a `download-video` message instead of downloading itself.
 
 ## Permissions
 
-- `activeTab`, `scripting`, `downloads`, `storage`, `webRequest`, plus
-  `host_permissions: ["<all_urls>"]` — the last two exist specifically for
-  HLS/DASH manifest interception and cross-origin manifest/segment fetches
-  (see Adaptive streaming below).
+- `activeTab`, `scripting`, `downloads`, `storage`, `webRequest`,
+  `notifications`, plus `host_permissions: ["<all_urls>"]` —
+  `webRequest`/`host_permissions` exist specifically for HLS/DASH manifest
+  interception and cross-origin manifest/segment fetches (see Adaptive
+  streaming below); `notifications` is for surfacing download failures
+  (`notifyFailure()` in the background worker) instead of failing silently.
 
 ## Build tooling
 
@@ -123,7 +138,21 @@ open the popup on a page with a `<video>` element.
   most fMP4/CMAF in practice, but **encrypted streams (`#EXT-X-KEY`) will
   download without decryption** and likely won't play. Not handled — this
   tool doesn't attempt DRM/encryption bypass by design (see root
-  `CLAUDE.md`).
+  `CLAUDE.md`). `downloadHlsVariant()` now surfaces fetch failures via
+  `chrome.notifications` instead of failing silently, but a CDN rejecting
+  segment requests for lacking the original page's `Referer` (hotlink
+  protection) will still show as a failure notification, not a working
+  download — `fetch()` can't set `Referer` manually; fixing that for real
+  would mean `chrome.declarativeNetRequest` header-rewrite rules, not
+  attempted yet.
+- `blob:` video sources (MSE playback — YouTube, LinkedIn, etc.) are
+  filtered out of the direct-download list in the popup (`isBlobOnly` /
+  `getDownloadableSources` in `src/popup/downloads.ts`) since they're
+  scoped to the page's own context and can never be fetched by the
+  extension. If the same page's underlying stream also happens to be HLS/
+  DASH, M4's Adaptive stream panel may still catch it — otherwise there's
+  currently no way to download it (this is most of what makes YouTube/M6
+  hard).
 - Long HLS downloads (many sequential segment fetches) risk the MV3 service
   worker being reclaimed mid-download on very long videos. Not yet
   mitigated (e.g. with a keep-alive alarm) — revisit if it turns out to be
