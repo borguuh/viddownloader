@@ -13,8 +13,12 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   last-known video list per tab id. Answers `get-videos` requests from the
   popup with the current tab's cached list.
 - **Popup** (`src/popup/`): React + TS UI. On open, asks the background
-  worker for the active tab's videos and lists them. Download controls come
-  in M2.
+  worker for the active tab's videos, lists them, and offers a download
+  button per detected source (main `src` plus any `<source>` children,
+  deduplicated). Download logic lives in `src/popup/downloads.ts`
+  (`getDownloadableSources`, `startDownload`) — call `chrome.downloads`
+  directly from the popup rather than round-tripping through the background
+  worker, since popup pages already have full extension API access.
 - **Shared types** (`src/shared/types.ts`): message/data contracts used by
   all three pieces above. Keep this the single source of truth for message
   shapes — don't inline ad-hoc message objects elsewhere.
@@ -37,5 +41,6 @@ open the popup on a page with a `<video>` element.
 
 ## Roadmap position
 
-This is Milestone 1 (detection only — see root `CLAUDE.md`). Next up (M2) is
-wiring `chrome.downloads.download()` to the detected `src`/`sources`.
+Milestones 1 (detection) and 2 (direct-file download) are done — see root
+`CLAUDE.md`. Next up (M3) is series/batch detection across a course-site
+playlist and multi-select queued downloads.
