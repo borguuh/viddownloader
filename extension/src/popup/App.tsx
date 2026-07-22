@@ -10,7 +10,7 @@ import type {
   PlaylistItem,
   StreamManifest,
 } from "../shared/types";
-import { getDownloadableSources, startDownload } from "./downloads";
+import { getDownloadableSources, isBlobOnly, startDownload } from "./downloads";
 import { ensureContentScriptInjected } from "./ensure-injected";
 import PlaylistPanel from "./PlaylistPanel";
 import StreamPanel from "./StreamPanel";
@@ -83,6 +83,14 @@ function VideoSources({ video }: { video: DetectedVideo }) {
   const sources = getDownloadableSources(video);
 
   if (sources.length === 0) {
+    if (isBlobOnly(video)) {
+      return (
+        <div style={{ color: "#888" }}>
+          This video streams in-page (blob:) and can't be downloaded directly — check "Adaptive
+          stream detected" below if one showed up.
+        </div>
+      );
+    }
     return <div style={{ color: "#888" }}>(no src detected yet)</div>;
   }
 
