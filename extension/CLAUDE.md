@@ -64,6 +64,18 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
     page. Progress is reported via `click-series-progress` messages
     (`{ total, completed, currentTitle, active }`) sent before/after each
     click — see Progress indicator below.
+  - **Per-video overlay button** (`syncOverlays()`): a small floating
+    "Download" button positioned over each `<video>` that has a real
+    (non-`blob:`) src, so pages with multiple videos have an unambiguous
+    per-video download action (not just a list in the popup). Positioned
+    with `position: fixed` and synced to `video.getBoundingClientRect()`
+    on scroll/resize (rAF-throttled via `scheduleReposition`) rather than
+    inserted into the page's own layout, so it can't disturb site CSS.
+    Runs on every `reportVideos()` call. Toggleable via the
+    `overlayButtonsEnabled` storage key (see Options page below), read
+    once at startup and live-updated via `chrome.storage.onChanged`. Sends
+    a `download-video` message directly, same as the popup's per-source
+    buttons.
 - **Background service worker** (`src/background/index.ts`): caches the
   last-known video list and `{ items, kind }` playlist per tab id, answers
   `get-videos`/`get-playlist` requests from the popup. Also owns the
@@ -101,13 +113,19 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   all three pieces above. Keep this the single source of truth for message
   shapes — don't inline ad-hoc message objects elsewhere.
 - **Download paths** (`src/shared/download-paths.ts`): every download goes
-  under `Downloader/` inside the default Downloads folder —
-  `buildDownloadPath(filename)` for single videos/HLS,
-  `buildDownloadPath(filename, seriesFolder)` for batch/playlist downloads
-  (`Downloader/<series folder>/<filename>`). The series folder name comes
-  from a text input in `PlaylistPanel` (defaults to the page title),
-  carried through `EnqueueDownloadsRequest.folderName` and threaded through
-  the background queue's `folderNameForTab` map per queued tab.
+  under a base subfolder (`DEFAULT_BASE_FOLDER = "Downloader"`, user
+  -configurable in the options page — see below) of the default Downloads
+  folder — `buildDownloadPath(filename, baseFolder)` for single
+  videos/HLS, `buildDownloadPath(filename, baseFolder, seriesFolder)` for
+  batch/playlist downloads (`<baseFolder>/<series folder>/<filename>`).
+  **Only the background worker calls `buildDownloadPath()`** — it's the
+  sole owner of the `baseFolderName` setting (cached in memory, reloaded
+  live via `chrome.storage.onChanged`). Every other context (popup,
+  content script) sends a **raw, unprefixed filename** in a
+  `download-video` message, plus an optional `seriesFolder`; the
+  background worker's `download-video` handler applies the prefix. This
+  keeps the base-folder setting effective everywhere without needing to
+  sync it into three separate contexts.
   **Important**: passing `filename` straight to `chrome.downloads.download()`
   is silently ignored if *any* installed extension (not just this one) has
   registered a `chrome.downloads.onDeterminingFilename` listener — a
@@ -121,9 +139,10 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   calling `chrome.downloads.download()` directly — that's why the popup
   sends a `download-video` message instead of downloading itself.
   `PlaylistPanel.tsx` branches "Download selected" on `kind`: `"navigate"`
-  sends `enqueue-downloads` to the background worker (unchanged); `"click"`
-  parses each selected item's `#item-N` placeholder back into an index and
-  sends `run-click-series` to the content script via
+  sends `enqueue-downloads` to the background worker (unchanged, series
+  folder name comes from a text input there, defaults to the page title);
+  `"click"` parses each selected item's `#item-N` placeholder back into an
+  index and sends `run-click-series` to the content script via
   `chrome.tabs.sendMessage(tabId, ...)` instead — that message has to reach
   the content script specifically (not the background worker), since only
   the content script has the live DOM elements to click. `ProgressBar.tsx`
@@ -157,6 +176,27 @@ since a 30+ item series otherwise runs with zero feedback for minutes:
   single-user tool.
 - **`ProgressBar.tsx`**: polls `get-progress` every second the popup is
   open; renders nothing when `progress` is `null` or `total === 0`.
+
+## Options page
+
+`src/options/` — a small React page (`options_ui.page` in `manifest.json`,
+`open_in_tab: true` so it gets real screen space rather than the tiny
+embedded panel Chrome shows by default). Not referenced by the popup or
+background — it's reached via the extension's details page or right-click
+menu in `chrome://extensions`. Settings are read/written directly via
+`chrome.storage.local` (every extension context has access — no messages
+needed) using the shared keys in `src/shared/settings.ts`:
+
+- **Base folder name** (`BASE_FOLDER_NAME_KEY`): text input, defaults to
+  `DEFAULT_BASE_FOLDER`. Picked up live by the background worker via
+  `chrome.storage.onChanged` (see Download paths above) — no reload needed.
+- **Overlay buttons toggle** (`OVERLAY_BUTTONS_ENABLED_KEY`): checkbox,
+  defaults on. Read by the content script (see per-video overlay button
+  above), also live via `chrome.storage.onChanged`.
+- **Saved playlist areas**: lists every `playlistSelector:<origin>` key
+  (via `chrome.storage.local.get(null)`, filtered by prefix) with a
+  "Forget" button per entry — the same effect as clicking "Clear saved
+  area" in the popup, but reachable for sites you're not currently on.
 
 ## Permissions
 
@@ -280,9 +320,9 @@ open the popup on a page with a `<video>` element.
 Milestones 1–4 are done, M5 is in progress (folder structure ✅, blob-URL
 guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅,
 click-driven ("single-page", no per-lesson URL) playlist support ✅,
-progress indicator for both batch flows ✅ — see root `CLAUDE.md` for the
-full round-by-round history). Still open for M5: per-video overlay
-download buttons, options page, download history, better error handling
-for blocked/CORS edge cases. M6 (MSE/blob-based platforms — YouTube,
-X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
+progress indicator for both batch flows ✅, per-video overlay download
+buttons ✅, options page ✅ — see root `CLAUDE.md` for the full
+round-by-round history). Still open for M5: download history, better
+error handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —
+YouTube, X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
 deliberately deferred until M5 is solid.
