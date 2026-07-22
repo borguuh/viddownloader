@@ -9,6 +9,9 @@ import type {
   GetStreamsResponse,
   GetVideosRequest,
   GetVideosResponse,
+  OffscreenCreateBlobRequest,
+  OffscreenCreateBlobResponse,
+  OffscreenRevokeRequest,
   PlaylistDetectedMessage,
   PlaylistItem,
   StreamManifest,
@@ -16,6 +19,7 @@ import type {
 } from "../shared/types";
 import { buildManifest, detectKindFromUrl, parseHlsSegments } from "./streams";
 import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
+import { blobToBase64 } from "../shared/base64";
 
 const videosByTab = new Map<number, DetectedVideo[]>();
 const playlistByTab = new Map<number, PlaylistItem[]>();
@@ -162,6 +166,43 @@ function tryDownloadFromQueueTab(tabId: number, videos: DetectedVideo[]) {
 // share a common init segment structure. Encrypted (#EXT-X-KEY) streams will
 // download but likely won't play; that's a known limitation, not handled yet.
 
+let offscreenReady: Promise<void> | null = null;
+
+// The service worker has no DOM, so URL.createObjectURL() isn't available
+// here — offload blob creation to a hidden offscreen document, which does
+// have it. See src/offscreen/offscreen.ts.
+function ensureOffscreenDocument(): Promise<void> {
+  if (!offscreenReady) {
+    offscreenReady = chrome.offscreen
+      .createDocument({
+        url: "src/offscreen/offscreen.html",
+        reasons: [chrome.offscreen.Reason.BLOBS],
+        justification: "Create a Blob object URL for a downloaded video (unavailable in the service worker)",
+      })
+      .catch((error) => {
+        // Already exists (e.g. a prior call raced this one) — fine, ignore.
+        if (!String(error).includes("single offscreen document")) throw error;
+      });
+  }
+  return offscreenReady;
+}
+
+async function downloadBlobParts(parts: Blob[], mimeType: string, filename: string): Promise<void> {
+  await ensureOffscreenDocument();
+  const base64Chunks = await Promise.all(parts.map(blobToBase64));
+
+  const request: OffscreenCreateBlobRequest = { type: "offscreen-create-blob", base64Chunks, mimeType };
+  const response = (await chrome.runtime.sendMessage(request)) as OffscreenCreateBlobResponse;
+
+  downloadWithPath(response.url, filename, () => {
+    // Revoke once the download has had time to read the blob.
+    setTimeout(() => {
+      const revoke: OffscreenRevokeRequest = { type: "offscreen-revoke", url: response.url };
+      chrome.runtime.sendMessage(revoke);
+    }, 60_000);
+  });
+}
+
 async function downloadHlsVariant(variantUrl: string) {
   try {
     const playlistResponse = await fetch(variantUrl);
@@ -170,20 +211,14 @@ async function downloadHlsVariant(variantUrl: string) {
     const segmentUrls = parseHlsSegments(playlistText, variantUrl);
     if (segmentUrls.length === 0) throw new Error("Playlist had no segments");
 
-    const chunks: BlobPart[] = [];
+    const chunks: Blob[] = [];
     for (const segmentUrl of segmentUrls) {
       const segmentResponse = await fetch(segmentUrl);
       if (!segmentResponse.ok) throw new Error(`Segment fetch failed: HTTP ${segmentResponse.status}`);
       chunks.push(await segmentResponse.blob());
     }
 
-    const blob = new Blob(chunks, { type: "video/mp2t" });
-    const objectUrl = URL.createObjectURL(blob);
-
-    downloadWithPath(objectUrl, buildDownloadPath("video.ts"), () => {
-      // Revoke once the download has had time to read the blob.
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
-    });
+    await downloadBlobParts(chunks, "video/mp2t", buildDownloadPath("video.ts"));
   } catch (error) {
     notifyFailure("Stream download failed", error);
   }

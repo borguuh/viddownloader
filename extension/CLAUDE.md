@@ -74,11 +74,13 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
 ## Permissions
 
 - `activeTab`, `scripting`, `downloads`, `storage`, `webRequest`,
-  `notifications`, plus `host_permissions: ["<all_urls>"]` —
+  `notifications`, `offscreen`, plus `host_permissions: ["<all_urls>"]` —
   `webRequest`/`host_permissions` exist specifically for HLS/DASH manifest
   interception and cross-origin manifest/segment fetches (see Adaptive
   streaming below); `notifications` is for surfacing download failures
-  (`notifyFailure()` in the background worker) instead of failing silently.
+  (`notifyFailure()` in the background worker) instead of failing silently;
+  `offscreen` is for the hidden document that creates Blob object URLs the
+  service worker itself can't (see HLS download below).
 
 ## Build tooling
 
@@ -113,9 +115,20 @@ open the popup on a page with a `<video>` element.
   `DOMParser`, so that'll mean pulling in a small XML parsing dependency).
 - **HLS download** (`downloadHlsVariant`): fetches the chosen variant
   playlist, resolves every segment URL, fetches segments **sequentially**
-  (no parallelism, no progress UI — both worth adding later), concatenates
-  them into one `Blob`, and downloads via a `URL.createObjectURL()` handed
-  to `chrome.downloads.download()`.
+  (no parallelism, no progress UI — both worth adding later) as `Blob`s.
+  **`URL.createObjectURL()` doesn't exist in the MV3 service worker** (no
+  DOM there), so blob assembly is offloaded to a hidden **offscreen
+  document** (`src/offscreen/`, `chrome.offscreen.createDocument`, the
+  `offscreen` permission): the background worker base64-encodes each
+  segment `Blob` (`blobToBase64` in `src/shared/base64.ts` — messaging is
+  JSON-only, so raw `Blob`/`ArrayBuffer` can't cross that boundary),
+  sends them to the offscreen document via `offscreen-create-blob`, which
+  decodes them back, builds the real `Blob`, calls
+  `URL.createObjectURL()`, and returns the resulting URL. The background
+  worker then downloads that URL via the normal `downloadWithPath()` path
+  and tells the offscreen document to `URL.revokeObjectURL()` it a minute
+  later. The offscreen document is created once and kept alive
+  (`offscreenReady`), not recreated per download.
 
 ## Known limitations to revisit
 

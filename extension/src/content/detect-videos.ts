@@ -110,24 +110,42 @@ if (!window.__videoDownloaderInjected) {
     return items;
   }
 
+  let observer: MutationObserver | undefined;
+
+  // Reloading the extension invalidates any content script instance still
+  // running in already-open tabs — chrome.runtime.sendMessage then throws
+  // "Extension context invalidated" on every call. That instance is dead
+  // and can't be revived short of reloading the page, so once it happens,
+  // stop trying (avoids repeat console spam every debounce tick) instead of
+  // leaving it as an uncaught error.
+  function sendIfContextValid(message: VideosDetectedMessage | PlaylistDetectedMessage) {
+    if (!chrome.runtime?.id) {
+      observer?.disconnect();
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage(message);
+    } catch {
+      observer?.disconnect();
+    }
+  }
+
   const reportVideos = () => {
     const videos = collectVideos();
-    const message: VideosDetectedMessage = { type: "videos-detected", videos };
-    chrome.runtime.sendMessage(message);
+    sendIfContextValid({ type: "videos-detected", videos });
   };
 
   const reportPlaylist = () => {
     const items = collectPlaylistLinks();
     if (items.length === 0) return;
-    const message: PlaylistDetectedMessage = { type: "playlist-detected", items };
-    chrome.runtime.sendMessage(message);
+    sendIfContextValid({ type: "playlist-detected", items });
   };
 
   reportVideos();
   reportPlaylist();
 
   let debounceHandle: number | undefined;
-  const observer = new MutationObserver(() => {
+  observer = new MutationObserver(() => {
     window.clearTimeout(debounceHandle);
     debounceHandle = window.setTimeout(() => {
       reportVideos();

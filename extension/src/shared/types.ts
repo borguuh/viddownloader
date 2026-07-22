@@ -90,3 +90,18 @@ export interface DownloadVideoRequest {
   url: string;
   filename: string;
 }
+
+export interface OffscreenCreateBlobRequest {
+  type: "offscreen-create-blob";
+  base64Chunks: string[];
+  mimeType: string;
+}
+
+export interface OffscreenCreateBlobResponse {
+  url: string;
+}
+
+export interface OffscreenRevokeRequest {
+  type: "offscreen-revoke";
+  url: string;
+}

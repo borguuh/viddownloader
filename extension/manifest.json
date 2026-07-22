@@ -3,7 +3,15 @@
   "name": "Video Downloader",
   "version": "0.1.0",
   "description": "Detect and download video playing on the current page, with resolution options.",
-  "permissions": ["activeTab", "scripting", "downloads", "storage", "webRequest", "notifications"],
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage",
+    "webRequest",
+    "notifications",
+    "offscreen"
+  ],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background/index.ts",

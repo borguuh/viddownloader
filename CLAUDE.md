@@ -120,7 +120,41 @@ justify one. Android and iOS may end up sharing code with each other later
      element on the page itself (IDM-style), not just a list in the popup —
      makes it unambiguous which one you're grabbing. Content script would
      position a floating button per detected `<video>`, wired to the same
-     M2 download logic for that specific element's source.
+     M2 download logic for that specific element's source. **Still open.**
+
+   **Round 3 (status update after another real testing pass):**
+   - ✅ **Folder bug — actually fixed, root cause found.** It wasn't a stale
+     build. `chrome.downloads.download()`'s `filename` argument is silently
+     ignored if *any* installed extension (not just this one) has
+     registered a `chrome.downloads.onDeterminingFilename` listener —
+     something else installed was almost certainly doing that. Fixed by
+     registering our own listener in the background worker and enforcing
+     the path there instead of trusting the initial argument (see extension
+     `CLAUDE.md`, `downloadWithPath()`).
+   - ✅ **LinkedIn blob: false positive — fixed** (the planned fix from round
+     2, now shipped): blob: sources no longer offer a doomed Download
+     button, with an explanation shown instead.
+   - ✅ **Twitter HLS download did nothing — fixed the silent-failure part**,
+     but uncovered a second, more fundamental bug in the process:
+     `URL.createObjectURL()` doesn't exist in the MV3 service worker at all
+     (no DOM there) — every HLS download was throwing immediately. Fixed
+     with a hidden **offscreen document** (`chrome.offscreen`, new
+     `offscreen` permission) that does the actual blob/object-URL creation,
+     with the background worker relaying segment data to it as base64
+     (messaging is JSON-only). Failures now also surface via
+     `chrome.notifications` instead of vanishing.
+   - ⏳ **Playlist detection — still the open item.** Confirmed unreliable on
+     arbitrary sites too, not just the course site: on Twitter/X it picked
+     up a "who to follow" sidebar (account names) as if it were a playlist.
+     This is expected of a blind DOM heuristic and reinforces that the
+     **manual playlist picker** (planned in round 2, not yet built) is the
+     real fix, especially since the user's actual target site's lesson list
+     isn't even a DOM ancestor of the `<video>` element, which is what the
+     current heuristic depends on.
+   - Also hardened: the content script now stops trying (and stops spamming
+     the page's console with "Extension context invalidated") once its
+     extension context is orphaned by a reload, instead of throwing
+     uncaught on every DOM-mutation tick.
 6. **M6 — YouTube support**: explicitly out of scope for M1–M5. YouTube
    doesn't serve a plain downloadable file or a standard `.m3u8`/`.mpd`
    manifest for regular (non-live) video — it delivers separate video/audio
