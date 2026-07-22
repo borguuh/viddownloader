@@ -41,17 +41,42 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
     — then saves it to `chrome.storage.local` and re-runs detection
     immediately. A `clear-playlist-selector` message removes the saved
     selector and falls back to the heuristic again.
+  - **`navigate` vs `click` playlists** (`classifyAnchors()`): some course
+    sites have no real per-lesson URL at all — every item is `<a href="#">`
+    (or similar) whose click handler swaps the page's own `<video>` in
+    place, single-page-app style, rather than navigating anywhere. If every
+    candidate anchor's raw `href` attribute is a pseudo-link (`#`, empty, or
+    `javascript:`), the whole group is classified `"click"` instead of
+    `"navigate"`; the actual `<a>` elements are kept in module-level
+    `playlistClickElements` (there's no distinct URL to key them by), and
+    each `PlaylistItem.url` becomes a synthetic `#item-N` placeholder
+    encoding its index into that array. This `kind` is threaded through
+    `playlist-detected`/`get-playlist` to the popup, which branches its
+    download flow accordingly (see `PlaylistPanel.tsx` below) — `"navigate"`
+    keeps using the background's open-tab queue (see below); `"click"`
+    instead sends `run-click-series` back to *this* content script, which
+    clicks each selected item in turn, polls `document.querySelector(
+    "video")?.currentSrc` for a change (`waitForNewVideoSrc`, 8s timeout —
+    items that never produce a video, e.g. quizzes mixed into the same
+    list, just time out and get skipped, no need to special-case them),
+    and sends a `download-video` message per one it finds — all
+    sequentially, with an 800ms pause between clicks to avoid hammering the
+    page.
 - **Background service worker** (`src/background/index.ts`): caches the
-  last-known video list and playlist per tab id, answers `get-videos`/
-  `get-playlist` requests from the popup. Also owns the **batch download
-  queue**: on `enqueue-downloads`, it opens each playlist URL in a background
-  tab (`active: false`), waits for that tab's content script to report a
-  video with a usable `src`, downloads it, closes the tab, and moves to the
-  next item — fully sequential, with a 20s per-tab timeout
-  (`TAB_LOAD_TIMEOUT_MS`) in case a page never surfaces a video. Tabs
-  spawned this way are tracked in `queueTabIds` so their `videos-detected`
-  messages are treated differently from normal browsing tabs (auto-download
-  instead of just caching for the popup).
+  last-known video list and `{ items, kind }` playlist per tab id, answers
+  `get-videos`/`get-playlist` requests from the popup. Also owns the
+  **`navigate`-style batch download queue**: on `enqueue-downloads`, it
+  opens each playlist URL in a background tab (`active: false`), waits for
+  that tab's content script to report a video with a usable `src`,
+  downloads it, closes the tab, and moves to the next item — fully
+  sequential, with a 20s per-tab timeout (`TAB_LOAD_TIMEOUT_MS`) in case a
+  page never surfaces a video. Tabs spawned this way are tracked in
+  `queueTabIds` so their `videos-detected` messages are treated differently
+  from normal browsing tabs (auto-download instead of just caching for the
+  popup). **This queue only applies to `"navigate"` playlists** — `"click"`
+  playlists (see content script above) never touch the background worker
+  for orchestration, only for the final `download-video` call per item,
+  since there's no separate tab/URL involved at all.
 - **Popup** (`src/popup/`): React + TS UI. On open, first calls
   `ensureContentScriptInjected()` (`src/popup/ensure-injected.ts`) —
   reads the content script paths straight out of
@@ -93,6 +118,13 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   through `downloadWithPath()`** (in the background worker) rather than
   calling `chrome.downloads.download()` directly — that's why the popup
   sends a `download-video` message instead of downloading itself.
+  `PlaylistPanel.tsx` branches "Download selected" on `kind`: `"navigate"`
+  sends `enqueue-downloads` to the background worker (unchanged); `"click"`
+  parses each selected item's `#item-N` placeholder back into an index and
+  sends `run-click-series` to the content script via
+  `chrome.tabs.sendMessage(tabId, ...)` instead — that message has to reach
+  the content script specifically (not the background worker), since only
+  the content script has the live DOM elements to click.
 
 ## Permissions
 
@@ -172,10 +204,19 @@ open the popup on a page with a `<video>` element.
   freshly-injected tab's very first popup open can occasionally miss the
   video list. Reopening the popup immediately after works. Not worth adding
   artificial delays for until it proves to be a real annoyance.
-- The batch queue downloads the *first* video found with a `src` on each
-  opened page — it doesn't yet handle pages with multiple videos or let you
-  pick a resolution per queued item. Fine for now since most course lesson
-  pages have exactly one player.
+- The `"navigate"` batch queue downloads the *first* video found with a
+  `src` on each opened page — it doesn't yet handle pages with multiple
+  videos or let you pick a resolution per queued item. Fine for now since
+  most course lesson pages have exactly one player.
+- The `"click"` series (`runClickSeries`) has no visible progress
+  indicator in the popup either — it runs silently in the page after the
+  popup sends `run-click-series`; the only feedback is files landing in
+  Downloads (or a lack thereof if something's timing out). Also: if the
+  page's video briefly shows a stale/cached `currentSrc` before swapping
+  to the real one, `waitForNewVideoSrc`'s "differs from the src captured
+  right before clicking" check could resolve too early on an intermediate
+  value — not observed yet, but worth knowing if a click-series download
+  grabs the wrong video.
 - HLS download concatenates segments as-is: works for MPEG-TS segments and
   most fMP4/CMAF in practice, but **encrypted streams (`#EXT-X-KEY`) will
   download without decryption** and likely won't play. Not handled — this
@@ -205,7 +246,8 @@ open the popup on a page with a `<video>` element.
 ## Roadmap position
 
 Milestones 1–4 are done, M5 is in progress (folder structure ✅, blob-URL
-guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅ — see
+guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅,
+click-driven ("single-page", no per-lesson URL) playlist support ✅ — see
 root `CLAUDE.md` for the full round-by-round history). Still open for M5:
 per-video overlay download buttons, options page, download history, better
 error handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —

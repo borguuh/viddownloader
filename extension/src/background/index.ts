@@ -22,7 +22,7 @@ import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-pa
 import { blobToBase64 } from "../shared/base64";
 
 const videosByTab = new Map<number, DetectedVideo[]>();
-const playlistByTab = new Map<number, PlaylistItem[]>();
+const playlistByTab = new Map<number, GetPlaylistResponse>();
 const streamsByTab = new Map<number, Map<string, StreamManifest>>();
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -247,8 +247,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "playlist-detected" && tabId !== undefined) {
-    const { items } = message as PlaylistDetectedMessage;
-    playlistByTab.set(tabId, items);
+    const { items, kind } = message as PlaylistDetectedMessage;
+    playlistByTab.set(tabId, { items, kind });
     return;
   }
 
@@ -261,7 +261,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "get-playlist") {
     const { tabId: queryTabId } = message as GetPlaylistRequest;
-    const response: GetPlaylistResponse = { items: playlistByTab.get(queryTabId) ?? [] };
+    const response: GetPlaylistResponse = playlistByTab.get(queryTabId) ?? { items: [], kind: "navigate" };
     sendResponse(response);
     return true;
   }

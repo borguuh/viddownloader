@@ -8,6 +8,7 @@ import type {
   GetVideosRequest,
   GetVideosResponse,
   PlaylistItem,
+  PlaylistKind,
   StreamManifest,
 } from "../shared/types";
 import { getDownloadableSources, isBlobOnly, startDownload } from "./downloads";
@@ -19,6 +20,7 @@ import StreamPanel from "./StreamPanel";
 export default function App() {
   const [videos, setVideos] = useState<DetectedVideo[]>([]);
   const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
+  const [playlistKind, setPlaylistKind] = useState<PlaylistKind>("navigate");
   const [streams, setStreams] = useState<StreamManifest[]>([]);
   const [tabId, setTabId] = useState<number | null>(null);
   const [defaultFolderName, setDefaultFolderName] = useState("series");
@@ -44,6 +46,7 @@ export default function App() {
       const playlistRequest: GetPlaylistRequest = { type: "get-playlist", tabId: tab.id };
       chrome.runtime.sendMessage(playlistRequest, (response: GetPlaylistResponse) => {
         setPlaylist(response?.items ?? []);
+        setPlaylistKind(response?.kind ?? "navigate");
       });
 
       const streamsRequest: GetStreamsRequest = { type: "get-streams", tabId: tab.id };
@@ -75,7 +78,14 @@ export default function App() {
         </div>
       )}
       {tabId !== null && <StreamPanel manifests={streams} tabId={tabId} />}
-      <PlaylistPanel items={playlist} defaultFolderName={defaultFolderName} />
+      {tabId !== null && (
+        <PlaylistPanel
+          items={playlist}
+          kind={playlistKind}
+          tabId={tabId}
+          defaultFolderName={defaultFolderName}
+        />
+      )}
       {tabId !== null && <PlaylistPicker tabId={tabId} />}
     </div>
   );

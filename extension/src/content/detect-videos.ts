@@ -1,11 +1,15 @@
 import type {
   ClearPlaylistSelectorRequest,
   DetectedVideo,
+  DownloadVideoRequest,
   PlaylistDetectedMessage,
   PlaylistItem,
+  PlaylistKind,
+  RunClickSeriesRequest,
   StartPickingRequest,
   VideosDetectedMessage,
 } from "../shared/types";
+import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
 
 declare global {
   interface Window {
@@ -59,29 +63,48 @@ if (!window.__videoDownloaderInjected) {
     return document.body;
   }
 
-  function extractLinksFromContainer(container: Element): PlaylistItem[] {
-    const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"));
+  // Some course sites (single-page style) have no real per-lesson URL at
+  // all — every item is an <a href="#"> whose click handler swaps the
+  // <video>'s source in place rather than navigating. classifyAnchors()
+  // tells the two cases apart: if every candidate anchor's raw href is a
+  // pseudo-link ("#", empty, or javascript:), treat the whole group as
+  // "click" style and remember the actual elements in playlistClickElements
+  // for runClickSeries() to click through later — there's nothing else to
+  // key them by, since they share no distinct URL.
+  let playlistClickElements: HTMLAnchorElement[] = [];
+
+  function classifyAnchors(anchors: HTMLAnchorElement[]): { kind: PlaylistKind; items: PlaylistItem[] } {
+    const candidates = anchors.filter((a) => {
+      const text = a.textContent?.trim() ?? "";
+      return text.length > 0 && text.length <= 200;
+    });
+
+    const isPseudoHref = (h: string) => h === "" || h === "#" || h.startsWith("javascript:");
+    const rawHrefs = candidates.map((a) => a.getAttribute("href") ?? "");
+    const looksClickDriven = candidates.length > 0 && rawHrefs.every(isPseudoHref);
+
+    if (looksClickDriven) {
+      playlistClickElements = candidates;
+      const items = candidates.map((a, index) => ({ title: a.textContent!.trim(), url: `#item-${index}` }));
+      return { kind: "click", items };
+    }
+
+    playlistClickElements = [];
     const seen = new Set<string>();
     const items: PlaylistItem[] = [];
-
-    for (const anchor of anchors) {
-      const text = anchor.textContent?.trim() ?? "";
-      if (!text || text.length > 200) continue;
-
+    for (const a of candidates) {
       let href: URL;
       try {
-        href = new URL(anchor.href, document.baseURI);
+        href = new URL(a.href, document.baseURI);
       } catch {
         continue;
       }
       if (href.origin !== location.origin) continue;
-      if (seen.has(anchor.href)) continue;
-
-      seen.add(anchor.href);
-      items.push({ title: text, url: anchor.href });
+      if (seen.has(a.href)) continue;
+      seen.add(a.href);
+      items.push({ title: a.textContent!.trim(), url: a.href });
     }
-
-    return items;
+    return { kind: "navigate", items };
   }
 
   /**
@@ -93,7 +116,7 @@ if (!window.__videoDownloaderInjected) {
    * course-site sidebars, but not guaranteed on arbitrary layouts. This is
    * only the fallback: see storedSelector below for the reliable path.
    */
-  function collectPlaylistLinksHeuristic(): PlaylistItem[] {
+  function collectPlaylistLinksHeuristic(): { kind: PlaylistKind; items: PlaylistItem[] } {
     const scope = findScopedContainer();
     const anchors = Array.from(scope.querySelectorAll<HTMLAnchorElement>("a[href]"));
     const buckets = new Map<string, HTMLAnchorElement[]>();
@@ -125,18 +148,8 @@ if (!window.__videoDownloaderInjected) {
       if (bucket.length > best.length) best = bucket;
     }
 
-    if (best.length < 3) return [];
-
-    const seen = new Set<string>();
-    const items: PlaylistItem[] = [];
-    for (const anchor of best) {
-      const url = anchor.href;
-      if (seen.has(url)) continue;
-      seen.add(url);
-      items.push({ title: anchor.textContent!.trim(), url });
-    }
-
-    return items;
+    if (best.length < 3) return { kind: "navigate", items: [] };
+    return classifyAnchors(best);
   }
 
   // The blind heuristic above can't reliably find every site's playlist
@@ -151,10 +164,13 @@ if (!window.__videoDownloaderInjected) {
     if (storedSelector) reportPlaylist();
   });
 
-  function collectPlaylistLinks(): PlaylistItem[] {
+  function collectPlaylistLinks(): { kind: PlaylistKind; items: PlaylistItem[] } {
     if (storedSelector) {
       const container = document.querySelector(storedSelector);
-      if (container) return extractLinksFromContainer(container);
+      if (container) {
+        const anchors = Array.from(container.querySelectorAll<HTMLAnchorElement>("a[href]"));
+        return classifyAnchors(anchors);
+      }
     }
     return collectPlaylistLinksHeuristic();
   }
@@ -224,6 +240,61 @@ if (!window.__videoDownloaderInjected) {
     }
   }
 
+  // --- Click-driven series download ---------------------------------------
+  // For "click" playlists (see classifyAnchors above): click each selected
+  // item in turn, wait for the page's own <video> to swap to a new,
+  // non-blob src, download it, then move to the next — all in this same
+  // tab, since there's no separate URL to open per lesson.
+
+  function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function waitForNewVideoSrc(beforeSrc: string, timeoutMs: number): Promise<string | null> {
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const check = () => {
+        const src = document.querySelector("video")?.currentSrc ?? "";
+        if (src && src !== beforeSrc) {
+          resolve(src);
+          return;
+        }
+        if (Date.now() - start > timeoutMs) {
+          resolve(null);
+          return;
+        }
+        setTimeout(check, 300);
+      };
+      check();
+    });
+  }
+
+  async function runClickSeries(indices: number[], folderName: string) {
+    for (const index of indices) {
+      const el = playlistClickElements[index];
+      if (!el) continue;
+
+      const beforeSrc = document.querySelector("video")?.currentSrc ?? "";
+      el.click();
+      // Some items (quizzes, etc.) never produce a video at all — this just
+      // times out for those and moves on, rather than needing to guess
+      // which items are "real" lessons in advance.
+      const src = await waitForNewVideoSrc(beforeSrc, 8000);
+
+      if (src && !src.startsWith("blob:")) {
+        const filename = suggestFilenameFromUrl(src, `${index}.mp4`);
+        const request: DownloadVideoRequest = {
+          type: "download-video",
+          url: src,
+          filename: buildDownloadPath(filename, folderName),
+        };
+        sendIfContextValid(request);
+      }
+
+      await sleep(800);
+    }
+  }
+
   chrome.runtime.onMessage.addListener((message) => {
     if ((message as StartPickingRequest)?.type === "start-picking") {
       startPicking();
@@ -233,6 +304,11 @@ if (!window.__videoDownloaderInjected) {
       storedSelector = null;
       chrome.storage.local.remove(storageKey);
       reportPlaylist();
+      return;
+    }
+    if ((message as RunClickSeriesRequest)?.type === "run-click-series") {
+      const { indices, folderName } = message as RunClickSeriesRequest;
+      runClickSeries(indices, folderName);
       return;
     }
   });
@@ -245,7 +321,7 @@ if (!window.__videoDownloaderInjected) {
   // and can't be revived short of reloading the page, so once it happens,
   // stop trying (avoids repeat console spam every debounce tick) instead of
   // leaving it as an uncaught error.
-  function sendIfContextValid(message: VideosDetectedMessage | PlaylistDetectedMessage) {
+  function sendIfContextValid(message: VideosDetectedMessage | PlaylistDetectedMessage | DownloadVideoRequest) {
     if (!chrome.runtime?.id) {
       observer?.disconnect();
       return;
@@ -263,9 +339,9 @@ if (!window.__videoDownloaderInjected) {
   };
 
   const reportPlaylist = () => {
-    const items = collectPlaylistLinks();
+    const { kind, items } = collectPlaylistLinks();
     if (items.length === 0) return;
-    sendIfContextValid({ type: "playlist-detected", items });
+    sendIfContextValid({ type: "playlist-detected", items, kind });
   };
 
   reportVideos();

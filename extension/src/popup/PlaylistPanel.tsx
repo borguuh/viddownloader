@@ -1,11 +1,25 @@
 import { useEffect, useState } from "react";
-import type { EnqueueDownloadsRequest, PlaylistItem } from "../shared/types";
+import type {
+  EnqueueDownloadsRequest,
+  PlaylistItem,
+  PlaylistKind,
+  RunClickSeriesRequest,
+} from "../shared/types";
+
+function parseClickIndex(url: string): number | null {
+  const match = url.match(/^#item-(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
 
 export default function PlaylistPanel({
   items,
+  kind,
+  tabId,
   defaultFolderName,
 }: {
   items: PlaylistItem[];
+  kind: PlaylistKind;
+  tabId: number;
   defaultFolderName: string;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -30,18 +44,40 @@ export default function PlaylistPanel({
   const downloadSelected = () => {
     const chosen = items.filter((item) => selected.has(item.url));
     if (chosen.length === 0) return;
-    const request: EnqueueDownloadsRequest = {
-      type: "enqueue-downloads",
-      items: chosen,
-      folderName: folderName.trim() || "series",
-    };
-    chrome.runtime.sendMessage(request);
+    const resolvedFolderName = folderName.trim() || "series";
+
+    if (kind === "click") {
+      // No separate URL per item on this site — clicking each one swaps the
+      // page's own <video>, so the content script has to do this in the
+      // same tab rather than opening background tabs.
+      const indices = chosen.map((item) => parseClickIndex(item.url)).filter((i): i is number => i !== null);
+      const request: RunClickSeriesRequest = {
+        type: "run-click-series",
+        indices,
+        folderName: resolvedFolderName,
+      };
+      chrome.tabs.sendMessage(tabId, request);
+    } else {
+      const request: EnqueueDownloadsRequest = {
+        type: "enqueue-downloads",
+        items: chosen,
+        folderName: resolvedFolderName,
+      };
+      chrome.runtime.sendMessage(request);
+    }
+
     setSelected(new Set());
   };
 
   return (
     <div style={{ marginTop: 16, borderTop: "1px solid #ddd", paddingTop: 8 }}>
       <h3 style={{ margin: "0 0 8px" }}>Playlist ({items.length} found)</h3>
+      {kind === "click" && (
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+          This site loads lessons in place (no separate page per lesson) — downloading will click
+          through your selection in this tab, one at a time.
+        </div>
+      )}
       <div style={{ marginBottom: 6, display: "flex", gap: 8 }}>
         <button onClick={selectAll}>Select all</button>
         <button onClick={selectNone}>Clear</button>

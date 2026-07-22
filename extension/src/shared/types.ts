@@ -8,8 +8,19 @@ export interface DetectedVideo {
 
 export interface PlaylistItem {
   title: string;
+  /** A real navigable URL for "navigate" playlists; a synthetic "#item-N" placeholder for "click" playlists. */
   url: string;
 }
+
+/**
+ * "navigate": each item is a distinct real URL — open it in a background
+ * tab, wait for a video, download, close (the original design).
+ * "click": items are JS-driven pseudo-links (all href="#" or identical) —
+ * there's no separate URL per lesson at all, so downloading means clicking
+ * each one in this same tab and watching the page's own <video> element
+ * swap its source, entirely orchestrated by the content script.
+ */
+export type PlaylistKind = "navigate" | "click";
 
 export interface VideosDetectedMessage {
   type: "videos-detected";
@@ -19,6 +30,7 @@ export interface VideosDetectedMessage {
 export interface PlaylistDetectedMessage {
   type: "playlist-detected";
   items: PlaylistItem[];
+  kind: PlaylistKind;
 }
 
 export interface GetVideosRequest {
@@ -37,6 +49,7 @@ export interface GetPlaylistRequest {
 
 export interface GetPlaylistResponse {
   items: PlaylistItem[];
+  kind: PlaylistKind;
 }
 
 export interface EnqueueDownloadsRequest {
@@ -114,4 +127,17 @@ export interface StartPickingRequest {
 /** Tells the content script to forget the picked playlist container for the current origin. */
 export interface ClearPlaylistSelectorRequest {
   type: "clear-playlist-selector";
+}
+
+/**
+ * For "click" playlists only: tells the content script to click each
+ * selected item (by its index into the last-detected click-item list, in
+ * order), wait for the page's own <video> to swap to a new src, and
+ * download it — all within the same tab, since there's no separate URL to
+ * open for each one.
+ */
+export interface RunClickSeriesRequest {
+  type: "run-click-series";
+  indices: number[];
+  folderName: string;
 }

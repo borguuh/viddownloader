@@ -168,17 +168,36 @@ justify one. Android and iOS may end up sharing code with each other later
      LinkedIn hit the identical technical wall), not dropped.** Until M6,
      the active priority stays the course site's actual playlist.
 
-   **Round 4 — building the manual playlist picker** *(in progress)*: the
-   blind DOM heuristic has now failed on both the real course site (lesson
-   list isn't a `<video>` ancestor) and arbitrary sites (X's "who to
-   follow" sidebar, LinkedIn's game/analytics links) — confirms it's not a
-   reliable general solution. Building the previously-planned override:
-   user clicks "Pick playlist area" in the popup, the content script enters
-   an element-picker mode (hover highlight, click to confirm) on the actual
-   page, and the chosen container's links become the playlist directly (no
-   more bucket-guessing) — persisted per-origin in `chrome.storage.local`
-   so it's remembered on future visits to that site. Falls back to the
-   heuristic when no selector has been picked yet for the current origin.
+   **Round 4 — manual playlist picker** *(done)*: the blind DOM heuristic
+   had failed on both the real course site (lesson list isn't a `<video>`
+   ancestor) and arbitrary sites (X's "who to follow" sidebar, LinkedIn's
+   game/analytics links) — confirmed not a reliable general solution.
+   Built the planned override: user clicks "Pick playlist area" in the
+   popup, the content script enters an element-picker mode (hover
+   highlight, click to confirm) on the actual page, and the chosen
+   container's links become the playlist directly — persisted per-origin
+   in `chrome.storage.local`, preferred over the heuristic on future
+   visits to that site.
+
+   **Round 5 — the picker still didn't work on the real course site, and
+   the reason was structural, not a detection bug.** User provided the
+   actual page markup: every lesson is `<a href="#" class="lecture-item"
+   data-index="N" data-item="ID">` — there is no distinct URL per lesson at
+   all. Clicking one runs JS that swaps the page's own `<video>` element's
+   source in place (single-page-app style); the whole "open each URL in a
+   background tab" architecture (used since M3) fundamentally can't apply
+   here, no matter how well the container is picked, because there's no
+   second URL to open. Quizzes are interleaved in the same list
+   (`class="... non-video-lecture"`, opens a modal instead of a video).
+   **Fixed** by classifying detected playlists as `"navigate"` (real
+   distinct URLs — the original M3 design, unchanged) vs `"click"`
+   (every candidate link is a pseudo-href like `#`) and, for `"click"`
+   playlists, downloading via an entirely different path: the content
+   script clicks each selected lesson in the *same tab*, polls the page's
+   `<video>` for its source to change, downloads what it finds (skipping
+   items that time out — quizzes and the like, with no need to hardcode
+   that class name), and moves to the next. See extension `CLAUDE.md` for
+   the implementation (`classifyAnchors`, `runClickSeries`).
 6. **M6 — MSE/blob-based platforms (YouTube, X/Twitter, LinkedIn, similar)**:
    explicitly out of scope for M1–M5, but **confirmed non-negotiable for
    the long run** — just deliberately deferred until M5 (course-site
