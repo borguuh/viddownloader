@@ -15,6 +15,7 @@ import { getDownloadableSources, isBlobOnly, startDownload } from "./downloads";
 import { ensureContentScriptInjected } from "./ensure-injected";
 import PlaylistPanel from "./PlaylistPanel";
 import PlaylistPicker from "./PlaylistPicker";
+import ProgressBar from "./ProgressBar";
 import StreamPanel from "./StreamPanel";
 
 export default function App() {
@@ -87,6 +88,7 @@ export default function App() {
         />
       )}
       {tabId !== null && <PlaylistPicker tabId={tabId} />}
+      {tabId !== null && <ProgressBar tabId={tabId} />}
     </div>
   );
 }

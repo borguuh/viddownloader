@@ -59,10 +59,27 @@ export interface EnqueueDownloadsRequest {
   folderName: string;
 }
 
-export interface QueueStatusMessage {
-  type: "queue-status";
-  remaining: number;
-  current: PlaylistItem | null;
+/** Progress for a batch/series download in flight — either the navigate queue or a click series. */
+export interface DownloadProgress {
+  total: number;
+  completed: number;
+  currentTitle: string | null;
+  active: boolean;
+}
+
+/** Sent from the content script to the background worker as a click series runs. */
+export interface ClickSeriesProgressMessage {
+  type: "click-series-progress";
+  progress: DownloadProgress;
+}
+
+export interface GetProgressRequest {
+  type: "get-progress";
+  tabId: number;
+}
+
+export interface GetProgressResponse {
+  progress: DownloadProgress | null;
 }
 
 export type StreamKind = "hls" | "dash";

@@ -61,7 +61,9 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
     list, just time out and get skipped, no need to special-case them),
     and sends a `download-video` message per one it finds — all
     sequentially, with an 800ms pause between clicks to avoid hammering the
-    page.
+    page. Progress is reported via `click-series-progress` messages
+    (`{ total, completed, currentTitle, active }`) sent before/after each
+    click — see Progress indicator below.
 - **Background service worker** (`src/background/index.ts`): caches the
   last-known video list and `{ items, kind }` playlist per tab id, answers
   `get-videos`/`get-playlist` requests from the popup. Also owns the
@@ -124,7 +126,37 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   sends `run-click-series` to the content script via
   `chrome.tabs.sendMessage(tabId, ...)` instead — that message has to reach
   the content script specifically (not the background worker), since only
-  the content script has the live DOM elements to click.
+  the content script has the live DOM elements to click. `ProgressBar.tsx`
+  polls `get-progress` every second (starting immediately on mount, so
+  reopening the popup mid-download shows current state right away rather
+  than waiting a full second) and renders a simple percentage bar; renders
+  nothing when there's no batch in flight (`progress.total === 0`).
+
+## Progress indicator
+
+Both batch download flows report progress so the popup can show a bar,
+since a 30+ item series otherwise runs with zero feedback for minutes:
+
+- **`"navigate"` queue**: the background worker owns a single global
+  `navigateQueueProgress` (only one such queue runs at a time — it's not
+  per-tab, since it spans multiple background tabs over its lifetime).
+  `enqueue()` grows `total` by however many items were just added (so
+  queuing more mid-batch just extends it rather than resetting); each
+  `finishTab()` (whether it downloaded something or just timed out)
+  increments `completed`; `processNext()` sets `currentTitle` to whichever
+  item is about to be opened. Marked inactive once the queue drains.
+- **`"click"` series**: the content script sends `click-series-progress`
+  messages as `runClickSeries()` runs; the background worker stores the
+  latest one per tab id in `clickSeriesProgressByTab`.
+- **`get-progress`** (background handler): while the navigate queue is
+  active, it always wins (it isn't tied to whichever tab the popup happens
+  to be showing). Otherwise, prefers the querying tab's own click-series
+  progress, falling back to the last navigate summary if there is one —
+  simple, not perfectly precise about "whose" progress is being shown if
+  you've run both kinds in the same session, but good enough for a
+  single-user tool.
+- **`ProgressBar.tsx`**: polls `get-progress` every second the popup is
+  open; renders nothing when `progress` is `null` or `total === 0`.
 
 ## Permissions
 
@@ -170,7 +202,9 @@ open the popup on a page with a `<video>` element.
   `DOMParser`, so that'll mean pulling in a small XML parsing dependency).
 - **HLS download** (`downloadHlsVariant`): fetches the chosen variant
   playlist, resolves every segment URL, fetches segments **sequentially**
-  (no parallelism, no progress UI — both worth adding later) as `Blob`s.
+  (no parallelism, and no progress reporting — unlike the two batch/series
+  flows, see Progress indicator below — both worth adding later) as
+  `Blob`s.
   **`URL.createObjectURL()` doesn't exist in the MV3 service worker** (no
   DOM there), so blob assembly is offloaded to a hidden **offscreen
   document** (`src/offscreen/`, `chrome.offscreen.createDocument`, the
@@ -208,15 +242,11 @@ open the popup on a page with a `<video>` element.
   `src` on each opened page — it doesn't yet handle pages with multiple
   videos or let you pick a resolution per queued item. Fine for now since
   most course lesson pages have exactly one player.
-- The `"click"` series (`runClickSeries`) has no visible progress
-  indicator in the popup either — it runs silently in the page after the
-  popup sends `run-click-series`; the only feedback is files landing in
-  Downloads (or a lack thereof if something's timing out). Also: if the
-  page's video briefly shows a stale/cached `currentSrc` before swapping
-  to the real one, `waitForNewVideoSrc`'s "differs from the src captured
-  right before clicking" check could resolve too early on an intermediate
-  value — not observed yet, but worth knowing if a click-series download
-  grabs the wrong video.
+- If the page's video briefly shows a stale/cached `currentSrc` before
+  swapping to the real one, `waitForNewVideoSrc`'s "differs from the src
+  captured right before clicking" check could resolve too early on an
+  intermediate value — not observed yet, but worth knowing if a
+  click-series download grabs the wrong video.
 - HLS download concatenates segments as-is: works for MPEG-TS segments and
   most fMP4/CMAF in practice, but **encrypted streams (`#EXT-X-KEY`) will
   download without decryption** and likely won't play. Not handled — this
@@ -240,16 +270,19 @@ open the popup on a page with a `<video>` element.
   worker being reclaimed mid-download on very long videos. Not yet
   mitigated (e.g. with a keep-alive alarm) — revisit if it turns out to be
   a real problem in practice.
-- No download progress indicator for streams or the batch queue — you only
-  see the result once it lands in Downloads.
+- The HLS stream download (`downloadHlsVariant`) still has no progress
+  reporting — only the two batch/series flows do (see Progress indicator
+  above). Worth adding the same pattern there if long stream downloads
+  turn out to need it too.
 
 ## Roadmap position
 
 Milestones 1–4 are done, M5 is in progress (folder structure ✅, blob-URL
 guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅,
-click-driven ("single-page", no per-lesson URL) playlist support ✅ — see
-root `CLAUDE.md` for the full round-by-round history). Still open for M5:
-per-video overlay download buttons, options page, download history, better
-error handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —
-YouTube, X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
+click-driven ("single-page", no per-lesson URL) playlist support ✅,
+progress indicator for both batch flows ✅ — see root `CLAUDE.md` for the
+full round-by-round history). Still open for M5: per-video overlay
+download buttons, options page, download history, better error handling
+for blocked/CORS edge cases. M6 (MSE/blob-based platforms — YouTube,
+X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
 deliberately deferred until M5 is solid.

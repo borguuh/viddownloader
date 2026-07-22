@@ -1,6 +1,8 @@
 import type {
   ClearPlaylistSelectorRequest,
+  ClickSeriesProgressMessage,
   DetectedVideo,
+  DownloadProgress,
   DownloadVideoRequest,
   PlaylistDetectedMessage,
   PlaylistItem,
@@ -269,10 +271,26 @@ if (!window.__videoDownloaderInjected) {
     });
   }
 
+  function reportClickProgress(progress: DownloadProgress) {
+    const message: ClickSeriesProgressMessage = { type: "click-series-progress", progress };
+    sendIfContextValid(message);
+  }
+
   async function runClickSeries(indices: number[], folderName: string) {
+    const total = indices.length;
+    let completed = 0;
+    reportClickProgress({ total, completed, currentTitle: null, active: true });
+
     for (const index of indices) {
       const el = playlistClickElements[index];
-      if (!el) continue;
+      if (!el) {
+        completed++;
+        reportClickProgress({ total, completed, currentTitle: null, active: true });
+        continue;
+      }
+
+      const title = el.textContent?.trim() || `Item ${index + 1}`;
+      reportClickProgress({ total, completed, currentTitle: title, active: true });
 
       const beforeSrc = document.querySelector("video")?.currentSrc ?? "";
       el.click();
@@ -291,8 +309,12 @@ if (!window.__videoDownloaderInjected) {
         sendIfContextValid(request);
       }
 
+      completed++;
+      reportClickProgress({ total, completed, currentTitle: null, active: true });
       await sleep(800);
     }
+
+    reportClickProgress({ total, completed, currentTitle: null, active: false });
   }
 
   chrome.runtime.onMessage.addListener((message) => {
@@ -321,7 +343,9 @@ if (!window.__videoDownloaderInjected) {
   // and can't be revived short of reloading the page, so once it happens,
   // stop trying (avoids repeat console spam every debounce tick) instead of
   // leaving it as an uncaught error.
-  function sendIfContextValid(message: VideosDetectedMessage | PlaylistDetectedMessage | DownloadVideoRequest) {
+  function sendIfContextValid(
+    message: VideosDetectedMessage | PlaylistDetectedMessage | DownloadVideoRequest | ClickSeriesProgressMessage,
+  ) {
     if (!chrome.runtime?.id) {
       observer?.disconnect();
       return;

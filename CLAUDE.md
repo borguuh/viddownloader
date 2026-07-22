@@ -200,14 +200,21 @@ justify one. Android and iOS may end up sharing code with each other later
    the implementation (`classifyAnchors`, `runClickSeries`). **Confirmed
    working on the real course site.**
 
-   **Still open for M5** (next up): a visible **progress indicator** for
-   both download flows — right now a batch/series download (`navigate`
-   queue or `click` series) runs with zero feedback in the popup UI beyond
-   files eventually landing in Downloads; for a 35-lecture course that's a
-   long silent wait with no way to tell it's working vs. stuck. Also still
-   open: per-video overlay download buttons on multi-video pages, options
-   page, download history, better error handling for blocked/CORS edge
-   cases.
+   **Round 6 — progress indicator** *(done)*: both batch flows now report
+   progress (`{ total, completed, currentTitle, active }`) — the
+   `"navigate"` queue via a single global tracker in the background
+   worker (`navigateQueueProgress`), the `"click"` series via
+   `click-series-progress` messages from the content script, stored
+   per-tab. A `ProgressBar` in the popup polls once a second and shows a
+   simple percentage bar with the current item's title, so reopening the
+   popup mid-download (or leaving it open) shows real progress instead of
+   silence. Doesn't yet cover the single-video HLS stream download flow —
+   only the batch/series ones, since those were the long-running silent
+   case that prompted this.
+
+   **Still open for M5**: per-video overlay download buttons on
+   multi-video pages, options page, download history, better error
+   handling for blocked/CORS edge cases.
 6. **M6 — MSE/blob-based platforms (YouTube, X/Twitter, LinkedIn, similar)**:
    explicitly out of scope for M1–M5, but **confirmed non-negotiable for
    the long run** — just deliberately deferred until M5 (course-site

@@ -1,10 +1,14 @@
 import type {
+  ClickSeriesProgressMessage,
   DetectedVideo,
+  DownloadProgress,
   DownloadStreamRequest,
   DownloadVideoRequest,
   EnqueueDownloadsRequest,
   GetPlaylistRequest,
   GetPlaylistResponse,
+  GetProgressRequest,
+  GetProgressResponse,
   GetStreamsRequest,
   GetStreamsResponse,
   GetVideosRequest,
@@ -24,11 +28,13 @@ import { blobToBase64 } from "../shared/base64";
 const videosByTab = new Map<number, DetectedVideo[]>();
 const playlistByTab = new Map<number, GetPlaylistResponse>();
 const streamsByTab = new Map<number, Map<string, StreamManifest>>();
+const clickSeriesProgressByTab = new Map<number, DownloadProgress>();
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   videosByTab.delete(tabId);
   playlistByTab.delete(tabId);
   streamsByTab.delete(tabId);
+  clickSeriesProgressByTab.delete(tabId);
 });
 
 // --- Centralized download path enforcement ---------------------------------
@@ -106,7 +112,18 @@ const folderNameForTab = new Map<number, string>();
 const tabTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 let processing = false;
 
+// Only one navigate-queue batch runs at a time, so this is a single global
+// (not per-tab like clickSeriesProgressByTab, since the queue spans
+// multiple background tabs over its lifetime, not one).
+let navigateQueueProgress: DownloadProgress | null = null;
+
 function enqueue(items: PlaylistItem[], folderName: string) {
+  navigateQueueProgress = {
+    total: (navigateQueueProgress?.total ?? 0) + items.length,
+    completed: navigateQueueProgress?.completed ?? 0,
+    currentTitle: navigateQueueProgress?.currentTitle ?? null,
+    active: true,
+  };
   queue.push(...items.map((item) => ({ item, folderName })));
   if (!processing) processNext();
 }
@@ -115,9 +132,11 @@ function processNext() {
   const entry = queue.shift();
   if (!entry) {
     processing = false;
+    if (navigateQueueProgress) navigateQueueProgress.active = false;
     return;
   }
   processing = true;
+  if (navigateQueueProgress) navigateQueueProgress.currentTitle = entry.item.title;
 
   chrome.tabs.create({ url: entry.item.url, active: false }, (tab) => {
     if (!tab?.id) {
@@ -143,6 +162,7 @@ function finishTab(tabId: number) {
   folderNameForTab.delete(tabId);
   videosByTab.delete(tabId);
   playlistByTab.delete(tabId);
+  if (navigateQueueProgress) navigateQueueProgress.completed++;
   chrome.tabs.remove(tabId).catch(() => {});
   processNext();
 }
@@ -290,5 +310,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { url, filename } = message as DownloadVideoRequest;
     downloadWithPath(url, filename);
     return;
+  }
+
+  if (message?.type === "click-series-progress" && tabId !== undefined) {
+    const { progress } = message as ClickSeriesProgressMessage;
+    clickSeriesProgressByTab.set(tabId, progress);
+    return;
+  }
+
+  if (message?.type === "get-progress") {
+    const { tabId: queryTabId } = message as GetProgressRequest;
+    // The navigate queue isn't tied to whichever tab the popup happens to be
+    // viewing (it opens/closes its own background tabs), so show it
+    // whenever it's actively running; once it's done, prefer this tab's own
+    // click-series progress if there is one, falling back to the finished
+    // navigate summary otherwise.
+    const progress = navigateQueueProgress?.active
+      ? navigateQueueProgress
+      : (clickSeriesProgressByTab.get(queryTabId) ?? navigateQueueProgress);
+    const response: GetProgressResponse = { progress };
+    sendResponse(response);
+    return true;
   }
 });
