@@ -11,6 +11,7 @@ import type {
   StreamManifest,
 } from "../shared/types";
 import { getDownloadableSources, startDownload } from "./downloads";
+import { ensureContentScriptInjected } from "./ensure-injected";
 import PlaylistPanel from "./PlaylistPanel";
 import StreamPanel from "./StreamPanel";
 
@@ -19,15 +20,19 @@ export default function App() {
   const [playlist, setPlaylist] = useState<PlaylistItem[]>([]);
   const [streams, setStreams] = useState<StreamManifest[]>([]);
   const [tabId, setTabId] = useState<number | null>(null);
+  const [defaultFolderName, setDefaultFolderName] = useState("series");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
       if (!tab?.id) {
         setLoading(false);
         return;
       }
       setTabId(tab.id);
+      setDefaultFolderName(tab.title ?? "series");
+
+      await ensureContentScriptInjected(tab.id);
 
       const videosRequest: GetVideosRequest = { type: "get-videos", tabId: tab.id };
       chrome.runtime.sendMessage(videosRequest, (response: GetVideosResponse) => {
@@ -69,7 +74,7 @@ export default function App() {
         </div>
       )}
       {tabId !== null && <StreamPanel manifests={streams} tabId={tabId} />}
-      <PlaylistPanel items={playlist} />
+      <PlaylistPanel items={playlist} defaultFolderName={defaultFolderName} />
     </div>
   );
 }

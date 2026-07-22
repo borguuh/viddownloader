@@ -14,6 +14,7 @@ import type {
   VideosDetectedMessage,
 } from "../shared/types";
 import { buildManifest, detectKindFromUrl, parseHlsSegments } from "./streams";
+import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
 
 const videosByTab = new Map<number, DetectedVideo[]>();
 const playlistByTab = new Map<number, PlaylistItem[]>();
@@ -57,32 +58,39 @@ chrome.webRequest.onBeforeRequest.addListener(
 
 const TAB_LOAD_TIMEOUT_MS = 20_000;
 
-const queue: PlaylistItem[] = [];
+interface QueueEntry {
+  item: PlaylistItem;
+  folderName: string;
+}
+
+const queue: QueueEntry[] = [];
 const queueTabIds = new Set<number>();
 const downloadedForTab = new Set<number>();
+const folderNameForTab = new Map<number, string>();
 const tabTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 let processing = false;
 
-function enqueue(items: PlaylistItem[]) {
-  queue.push(...items);
+function enqueue(items: PlaylistItem[], folderName: string) {
+  queue.push(...items.map((item) => ({ item, folderName })));
   if (!processing) processNext();
 }
 
 function processNext() {
-  const item = queue.shift();
-  if (!item) {
+  const entry = queue.shift();
+  if (!entry) {
     processing = false;
     return;
   }
   processing = true;
 
-  chrome.tabs.create({ url: item.url, active: false }, (tab) => {
+  chrome.tabs.create({ url: entry.item.url, active: false }, (tab) => {
     if (!tab?.id) {
       processNext();
       return;
     }
     const tabId = tab.id;
     queueTabIds.add(tabId);
+    folderNameForTab.set(tabId, entry.folderName);
     tabTimeouts.set(
       tabId,
       setTimeout(() => finishTab(tabId), TAB_LOAD_TIMEOUT_MS),
@@ -96,6 +104,7 @@ function finishTab(tabId: number) {
   tabTimeouts.delete(tabId);
   queueTabIds.delete(tabId);
   downloadedForTab.delete(tabId);
+  folderNameForTab.delete(tabId);
   videosByTab.delete(tabId);
   playlistByTab.delete(tabId);
   chrome.tabs.remove(tabId).catch(() => {});
@@ -108,7 +117,11 @@ function tryDownloadFromQueueTab(tabId: number, videos: DetectedVideo[]) {
   if (!video) return;
 
   downloadedForTab.add(tabId);
-  chrome.downloads.download({ url: video.src }, () => finishTab(tabId));
+  const folderName = folderNameForTab.get(tabId);
+  const filename = suggestFilenameFromUrl(video.src, `${tabId}.mp4`);
+  chrome.downloads.download({ url: video.src, filename: buildDownloadPath(filename, folderName) }, () =>
+    finishTab(tabId),
+  );
 }
 
 // --- HLS variant download --------------------------------------------------
@@ -134,7 +147,7 @@ async function downloadHlsVariant(variantUrl: string) {
   const blob = new Blob(chunks, { type: "video/mp2t" });
   const objectUrl = URL.createObjectURL(blob);
 
-  chrome.downloads.download({ url: objectUrl, filename: "video.ts" }, () => {
+  chrome.downloads.download({ url: objectUrl, filename: buildDownloadPath("video.ts") }, () => {
     // Revoke once the download has had time to read the blob.
     setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   });
@@ -173,8 +186,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "enqueue-downloads") {
-    const { items } = message as EnqueueDownloadsRequest;
-    enqueue(items);
+    const { items, folderName } = message as EnqueueDownloadsRequest;
+    enqueue(items, folderName);
     return;
   }
 

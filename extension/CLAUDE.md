@@ -9,11 +9,20 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   queries `<video>` elements (and their `<source>` children), sends a
   `videos-detected` message to the background worker whenever the DOM
   changes (debounced 300ms via `MutationObserver`) or a video's metadata
-  loads. Also runs `collectPlaylistLinks()`, a heuristic that buckets
-  same-origin `<a href>` elements by their parent's tag+class signature and
-  picks the largest bucket (≥3 distinct links) as the likely lesson/episode
-  list, sent as `playlist-detected`. This is inherently fuzzy — it works for
-  typical course-site sidebars but isn't guaranteed on arbitrary layouts.
+  loads. The whole body is wrapped in a `window.__videoDownloaderInjected`
+  guard so it's safe to inject twice — needed because the popup injects
+  this script on demand (see `ensure-injected.ts` below) rather than relying
+  only on the manifest's automatic injection into freshly-navigated tabs.
+  Also runs `collectPlaylistLinks()`, a heuristic that first narrows to
+  `findScopedContainer()` — the nearest ancestor of the `<video>` element
+  with ≥3 links, excluding `<nav>`/`<header>`/`<footer>` — then buckets
+  same-origin links within that scope by their parent's tag+class signature
+  and picks the largest bucket (≥3 distinct links) as the likely
+  lesson/episode list, sent as `playlist-detected`. Scoping to the area
+  around the player (rather than the whole page) is what keeps this from
+  picking up sitewide nav menus as if they were playlist items. Still
+  fuzzy by nature — works for typical course-site layouts, not guaranteed
+  on arbitrary ones.
 - **Background service worker** (`src/background/index.ts`): caches the
   last-known video list and playlist per tab id, answers `get-videos`/
   `get-playlist` requests from the popup. Also owns the **batch download
@@ -25,16 +34,29 @@ inside this `extension/` directory (`npm install`, `npm run dev`, `npm run build
   spawned this way are tracked in `queueTabIds` so their `videos-detected`
   messages are treated differently from normal browsing tabs (auto-download
   instead of just caching for the popup).
-- **Popup** (`src/popup/`): React + TS UI. On open, asks the background
-  worker for the active tab's videos, lists them, and offers a download
-  button per detected source (main `src` plus any `<source>` children,
-  deduplicated). Download logic lives in `src/popup/downloads.ts`
-  (`getDownloadableSources`, `startDownload`) — call `chrome.downloads`
-  directly from the popup rather than round-tripping through the background
-  worker, since popup pages already have full extension API access.
+- **Popup** (`src/popup/`): React + TS UI. On open, first calls
+  `ensureContentScriptInjected()` (`src/popup/ensure-injected.ts`) —
+  reads the content script paths straight out of
+  `chrome.runtime.getManifest()` and injects them into the active tab via
+  `chrome.scripting.executeScript` if they aren't already running there —
+  then asks the background worker for the active tab's videos/playlist/
+  streams. Offers a download button per detected source (main `src` plus
+  any `<source>` children, deduplicated). Download logic lives in
+  `src/popup/downloads.ts` (`getDownloadableSources`, `startDownload`) —
+  call `chrome.downloads` directly from the popup rather than
+  round-tripping through the background worker, since popup pages already
+  have full extension API access.
 - **Shared types** (`src/shared/types.ts`): message/data contracts used by
   all three pieces above. Keep this the single source of truth for message
   shapes — don't inline ad-hoc message objects elsewhere.
+- **Download paths** (`src/shared/download-paths.ts`): every download goes
+  under `Downloader/` inside the default Downloads folder —
+  `buildDownloadPath(filename)` for single videos/HLS,
+  `buildDownloadPath(filename, seriesFolder)` for batch/playlist downloads
+  (`Downloader/<series folder>/<filename>`). The series folder name comes
+  from a text input in `PlaylistPanel` (defaults to the page title),
+  carried through `EnqueueDownloadsRequest.folderName` and threaded through
+  the background queue's `folderNameForTab` map per queued tab.
 
 ## Permissions
 
@@ -84,8 +106,15 @@ open the popup on a page with a `<video>` element.
 
 - Playlist detection is a generic DOM heuristic, not per-site. If a
   particular course site doesn't get picked up, the fix is almost always in
-  `collectPlaylistLinks()` (e.g. adjust the minimum bucket size, or the
-  signature used to group anchors) rather than the queue/download logic.
+  `collectPlaylistLinks()`/`findScopedContainer()` (e.g. adjust the minimum
+  bucket size, the scoping walk-up logic, or the signature used to group
+  anchors) rather than the queue/download logic.
+- There's a small race in the popup: `ensureContentScriptInjected` resolves
+  once the script has run synchronously, but the `videos-detected` message
+  it sends is still an async dispatch to the background worker, so a
+  freshly-injected tab's very first popup open can occasionally miss the
+  video list. Reopening the popup immediately after works. Not worth adding
+  artificial delays for until it proves to be a real annoyance.
 - The batch queue downloads the *first* video found with a `src` on each
   opened page — it doesn't yet handle pages with multiple videos or let you
   pick a resolution per queued item. Fine for now since most course lesson
@@ -104,6 +133,8 @@ open the popup on a page with a `<video>` element.
 
 ## Roadmap position
 
-Milestones 1–4 are done — see root `CLAUDE.md`. Next up (M5) is polish:
-options page, download history, and error handling for blocked/CORS edge
-cases.
+Milestones 1–4 are done, M5 is in progress (folder structure + the reload/
+playlist-scope/YouTube-not-supported bugs found in real testing — see root
+`CLAUDE.md`). Still open for M5: options page, download history, better
+error handling for blocked/CORS edge cases. YouTube support is its own
+milestone (M6), deliberately not attempted yet.

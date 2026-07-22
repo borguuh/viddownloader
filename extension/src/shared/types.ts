@@ -42,6 +42,8 @@ export interface GetPlaylistResponse {
 export interface EnqueueDownloadsRequest {
   type: "enqueue-downloads";
   items: PlaylistItem[];
+  /** Series subfolder name, e.g. "MyCourse" -> Downloader/MyCourse/lesson-01.mp4 */
+  folderName: string;
 }
 
 export interface QueueStatusMessage {

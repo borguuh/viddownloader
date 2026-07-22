@@ -1,4 +1,5 @@
 import type { DetectedVideo } from "../shared/types";
+import { buildDownloadPath, suggestFilenameFromUrl } from "../shared/download-paths";
 
 export interface DownloadableSource {
   url: string;
@@ -12,21 +13,10 @@ export function getDownloadableSources(video: DetectedVideo): DownloadableSource
 
   return unique.map((url, index) => ({
     url,
-    filename: suggestFilename(url, video.id, index),
+    filename: suggestFilenameFromUrl(url, `${video.id}-${index}.mp4`),
   }));
 }
 
-function suggestFilename(url: string, videoId: string, index: number): string {
-  try {
-    const pathname = new URL(url).pathname;
-    const base = pathname.substring(pathname.lastIndexOf("/") + 1);
-    if (base) return decodeURIComponent(base);
-  } catch {
-    // fall through to generated name
-  }
-  return `${videoId}-${index}.mp4`;
-}
-
 export function startDownload(source: DownloadableSource): void {
-  chrome.downloads.download({ url: source.url, filename: source.filename });
+  chrome.downloads.download({ url: source.url, filename: buildDownloadPath(source.filename) });
 }
