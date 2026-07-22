@@ -212,9 +212,31 @@ justify one. Android and iOS may end up sharing code with each other later
    only the batch/series ones, since those were the long-running silent
    case that prompted this.
 
-   **Still open for M5**: per-video overlay download buttons on
-   multi-video pages, options page, download history, better error
-   handling for blocked/CORS edge cases.
+   **Round 7 — remaining M5 items, all done in one pass** *(done)*:
+   - **Per-video overlay download buttons**: a small floating "Download"
+     button positioned over each `<video>` with a real (non-`blob:`) src —
+     fixed-position, synced to the video's bounding rect, so pages with
+     multiple videos have an unambiguous per-video action. Toggleable in
+     the new options page.
+   - **Options page**: base folder name (replaces the hardcoded
+     `"Downloader"`), the overlay-buttons toggle, and management of saved
+     playlist-picker selectors (forget one without needing to be on that
+     site).
+   - **Download history**: every completed download recorded (filename,
+     url, timestamp), viewable and clearable from the options page.
+   - **Generic failure notifications**: every download failure mode now
+     surfaces as a `chrome.notifications` toast instead of failing
+     silently — immediate failures, mid-download interruptions (Safe
+     Browsing blocks, disk full, etc.), and navigate-queue items where no
+     video was ever found. See extension `CLAUDE.md` "Error handling" for
+     the full breakdown.
+
+   This required a supporting refactor: only the background worker now
+   applies the base-folder path prefix (it owns the configurable setting);
+   popup and content-script senders send raw filenames via `download-video`
+   messages instead of pre-building the full path themselves.
+
+   **M5 is now essentially complete.**
 6. **M6 — MSE/blob-based platforms (YouTube, X/Twitter, LinkedIn, similar)**:
    explicitly out of scope for M1–M5, but **confirmed non-negotiable for
    the long run** — just deliberately deferred until M5 (course-site

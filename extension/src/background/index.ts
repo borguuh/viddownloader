@@ -84,6 +84,7 @@ function downloadWithPath(url: string, filename: string, callback?: (id?: number
     // it — clean up so we don't leak the entry.
     if (id === undefined) {
       pendingFilenames.delete(url);
+      notifyFailure("Download failed to start", chrome.runtime.lastError?.message ?? "Unknown error");
     } else {
       ourDownloadIds.add(id);
     }
@@ -110,6 +111,12 @@ chrome.downloads.onChanged.addListener((delta) => {
     });
   } else if (delta.state?.current === "interrupted") {
     ourDownloadIds.delete(delta.id);
+    chrome.downloads.search({ id: delta.id }).then(([item]) => {
+      // Covers cases chrome.downloads.download()'s own callback can't see:
+      // blocked by Safe Browsing, network failure mid-download, disk full,
+      // file type blocked by browser policy, etc.
+      notifyFailure("Download interrupted", item?.error ?? "Unknown reason");
+    });
   }
 });
 
@@ -154,6 +161,7 @@ const queue: QueueEntry[] = [];
 const queueTabIds = new Set<number>();
 const downloadedForTab = new Set<number>();
 const folderNameForTab = new Map<number, string>();
+const titleForTab = new Map<number, string>();
 const tabTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 let processing = false;
 
@@ -191,6 +199,7 @@ function processNext() {
     const tabId = tab.id;
     queueTabIds.add(tabId);
     folderNameForTab.set(tabId, entry.folderName);
+    titleForTab.set(tabId, entry.item.title);
     tabTimeouts.set(
       tabId,
       setTimeout(() => finishTab(tabId), TAB_LOAD_TIMEOUT_MS),
@@ -203,11 +212,17 @@ function finishTab(tabId: number) {
   if (timeout) clearTimeout(timeout);
   tabTimeouts.delete(tabId);
   queueTabIds.delete(tabId);
+  const downloaded = downloadedForTab.has(tabId);
   downloadedForTab.delete(tabId);
   folderNameForTab.delete(tabId);
+  const title = titleForTab.get(tabId);
+  titleForTab.delete(tabId);
   videosByTab.delete(tabId);
   playlistByTab.delete(tabId);
   if (navigateQueueProgress) navigateQueueProgress.completed++;
+  if (!downloaded) {
+    notifyFailure("Skipped in series", `No video found: ${title ?? "(untitled item)"}`);
+  }
   chrome.tabs.remove(tabId).catch(() => {});
   processNext();
 }

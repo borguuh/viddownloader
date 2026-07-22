@@ -208,6 +208,32 @@ needed) using the shared keys in `src/shared/settings.ts`:
   `basename()`, for display only). Stored under `DOWNLOAD_HISTORY_KEY`;
   "Clear history" just removes that key.
 
+## Error handling
+
+Every download failure mode this extension can hit ends up as a
+`chrome.notifications` toast via `notifyFailure()`, rather than failing
+silently — there were several silent-failure bugs early in M5 that this
+directly addresses:
+
+- **Immediate failure** (`downloadWithPath`'s own callback returns `id ===
+  undefined`): e.g. an invalid URL. Notifies with
+  `chrome.runtime.lastError?.message`.
+- **Interrupted after starting** (`chrome.downloads.onChanged`, `state ===
+  "interrupted"`): covers cases the initial callback can't see — blocked by
+  Safe Browsing, network failure mid-download, disk full, file type
+  blocked by browser policy, etc. Notifies with the download item's own
+  `error` reason via `chrome.downloads.search({ id })`.
+- **HLS stream fetch/parse failures** (`downloadHlsVariant`'s
+  `try/catch` — see Adaptive streaming above).
+- **Navigate-queue items with no video found** (`finishTab`): if a queued
+  tab hits its 20s timeout without `tryDownloadFromQueueTab` ever firing a
+  download (tracked via whether `downloadedForTab` has the tab id),
+  notifies "Skipped in series: no video found: `<title>`" using the
+  title cached in `titleForTab` when the tab was opened. **Deliberately
+  not done for `"click"`-series timeouts** — those routinely include
+  non-video items (quizzes mixed into a lesson list) where a timeout is
+  expected and normal, not a failure worth surfacing per-item.
+
 ## Permissions
 
 - `activeTab`, `scripting`, `downloads`, `storage`, `webRequest`,
@@ -331,8 +357,8 @@ Milestones 1–4 are done, M5 is in progress (folder structure ✅, blob-URL
 guard ✅, HLS crash + error notifications ✅, manual playlist picker ✅,
 click-driven ("single-page", no per-lesson URL) playlist support ✅,
 progress indicator for both batch flows ✅, per-video overlay download
-buttons ✅, options page ✅, download history ✅ — see root `CLAUDE.md` for
-the full round-by-round history). Still open for M5: better error
-handling for blocked/CORS edge cases. M6 (MSE/blob-based platforms —
-YouTube, X/Twitter, LinkedIn) is confirmed non-negotiable long-term but
-deliberately deferred until M5 is solid.
+buttons ✅, options page ✅, download history ✅, generic failure
+notifications ✅ — see root `CLAUDE.md` for the full round-by-round
+history). **M5 is now essentially complete.** M6 (MSE/blob-based
+platforms — YouTube, X/Twitter, LinkedIn) is confirmed non-negotiable
+long-term and is the next milestone to scope in detail.
